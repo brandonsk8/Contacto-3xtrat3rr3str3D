@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.company</groupId>
+    <artifactId>compilador2-proyecto1</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+    <name>Contacto 3xtrat3rr3str3D</name>
+    <description>Proyecto 1 - Organizacion de Lenguajes y Compiladores 2 (CUNOC) - Y?, Zetariano y Pig Latin a C3D</description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <antlr4.version>4.13.1</antlr4.version>
+    </properties>
+
+    <dependencies>
+        <!-- Runtime de ANTLR4, usado por los 3 parsers generados -->
+        <dependency>
+            <groupId>org.antlr</groupId>
+            <artifactId>antlr4-runtime</artifactId>
+            <version>${antlr4.version}</version>
+        </dependency>
+
+        <!-- JUnit 5 para pruebas de las gramaticas y del generador de cuartetas -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                antlr4-maven-plugin detecta TODOS los .g4 bajo src/main/antlr4
+                de forma recursiva. Como cada gramatica declara su propio
+                "package" (ver los .g4), cada una genera su Lexer/Parser/
+                Listener/Visitor en su propio paquete Java, sin chocar entre
+                si. No hace falta un modulo Maven por lenguaje.
+            -->
+            <plugin>
+                <groupId>org.antlr</groupId>
+                <artifactId>antlr4-maven-plugin</artifactId>
+                <version>${antlr4.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>antlr4</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <visitor>true</visitor>
+                    <listener>true</listener>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>17</release>
+                </configuration>
+            </plugin>
+
+            <!--
+                Permite generar un jar ejecutable con todo incluido (GUI Swing).
+                El punto de entrada del .jar es VentanaPrincipal (la GUI) y NO
+                Main (la suite de verificacion) - un usuario que corre
+                'java -jar ...jar' espera abrir el IDE, no ver una lista de
+                "OK - ..." por consola. Main.java sigue existiendo igual que
+                antes y se sigue corriendo aparte (desde IntelliJ, con 'mvn'
+                + Main) cuando haga falta reverificar el proyecto - el shade
+                plugin no lo borra ni lo afecta, solo cambia cual de los dos
+                main() queda como el del .jar empaquetado.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.1</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.company.gui.VentanaPrincipal</mainClass>
+                                </transformer>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

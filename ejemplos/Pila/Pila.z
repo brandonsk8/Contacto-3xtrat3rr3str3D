@@ -1,0 +1,54 @@
+public class Pila {
+    private Nodo cima;
+    private int tamanio;
+
+    public Pila() {
+        this.cima = null;
+        this.tamanio = 0;
+    }
+
+    // apilar (push)
+    public void apilar(int dato) {
+        Nodo nuevo = new Nodo(dato);
+        nuevo.setSiguiente(cima);
+        cima = nuevo;
+        tamanio++;
+    }
+
+    // desapilar (pop)
+    public int desapilar() {
+        int dato = cima.getDato();
+        cima = cima.getSiguiente();
+        tamanio--;
+        return dato;
+    }
+
+    // ver el elemento en la cima (peek)
+    public int obtenerCima() {
+        if (estaVacia()) {
+            return -1;
+        }
+        return cima.getDato();
+    }
+
+    public boolean estaVacia() {
+        return cima == null;
+    }
+
+    public int obtenerTamanio() {
+        return tamanio;
+    }
+
+    public String toString() {
+        String resultado = "Pila [Cima -> Base]: ";
+        Nodo actual = cima;
+        while (actual != null) {
+            resultado = resultado + actual.getDato();
+            if (actual.getSiguiente() != null) {
+                resultado = resultado + ", ";
+            }
+            actual = actual.getSiguiente();
+        }
+        return resultado;
+    }
+}

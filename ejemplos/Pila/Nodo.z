@@ -1,0 +1,25 @@
+public class Nodo {
+    int dato;
+    Nodo siguiente;
+
+    public Nodo(int dato1) {
+        dato = dato1;
+        siguiente = null;
+    }
+
+    public int getDato() {
+        return dato;
+    }
+
+    public void setDato(int dato1) {
+        dato = dato1;
+    }
+
+    public Nodo getSiguiente() {
+        return siguiente;
+    }
+
+    public void setSiguiente(Nodo siguiente1) {
+        siguiente = siguiente1;
+    }
+}
