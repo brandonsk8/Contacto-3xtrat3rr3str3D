@@ -17,42 +17,19 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Backend "cuartetas -> C": orquesta la traduccion de las cuartetas que
- * dejan YVisitor, ZetarianoAnalizador y PigLatinAnalizador al .c
- * equivalente. El trabajo se reparte en 3 clases (todas en este mismo
- * paquete com.company.backend, de ahi el nombre):
+ * Backend "cuartetas -> C". Orquesta 3 clases del mismo paquete: TiposC
+ * (tipo C de cada Tipo/texto), InferenciaTipos (Pase A, tipo de cada
+ * temporal) y EmisorSentencias (Pase B, cuarteta -> sentencia C). Esta
+ * clase decide que funcion/clase/estructura se puede traducir, arma
+ * firmas/declaraciones y ensambla el .c final.
  *
- *   - TiposC: que tipo C le corresponde a cada Tipo semantico o texto de
- *     cuarteta (la usan las otras 2 y esta clase).
- *   - InferenciaTipos: Pase A, le asigna un tipo C a cada temporal y
- *     variable antes de emitir nada.
- *   - EmisorSentencias: Pase B, ya con los tipos resueltos, traduce cada
- *     cuarteta a su sentencia C.
+ * Cubre: primitivos, estructuras de Y?, clases de Zetariano, concat de
+ * cadenas, y arreglos de 1 dimension de entero/decimal/booleano.
+ * Pendiente: arreglos multidimensionales, de cadena/estructura/clase,
+ * arreglos-parametro de Zetariano, y arreglos de Y? de tamaño no literal.
  *
- * Esta clase se queda con lo que ninguna de las otras 3 puede hacer sola:
- * decidir que funcion/constructor/metodo/clase/estructura SI se puede
- * traducir (los prefiltros calcular*Soportad*s), armar la firma y las
- * declaraciones de cada funcion, y ensamblar el .c final (includes,
- * helpers de cadena, structs, prototipos, cuerpos).
- *
- * Cubre: tipos primitivos (entero/decimal/caracter/booleano), estructuras
- * de Y? (planas, anidadas y auto-referenciadas), clases de Zetariano
- * (constructores, metodos, 'this', 'new', llamadas encadenadas), cadenas
- * con 'concat', y arreglos de 1 dimension de entero/decimal/booleano:
- * campos de estructura y variables locales de Y? con tamaño literal
- * ('entero arr[10]'), y variables locales o campos de clase de Zetariano
- * / Pig Latin creados con 'new tipo[n]' o 'series' (reservados con
- * malloc() en tiempo de ejecucion). Quedan pendientes: arreglos
- * multidimensionales, de cadena/caracter/estructura/clase, arreglos-
- * parametro de Zetariano, y arreglos de Y? cuyo tamaño no sea un entero
- * literal.
- *
- * Si algo no esta soportado (arreglo, cadena en un lugar no cubierto,
- * etc.) no se genera C invalido: se omite esa funcion/clase y queda
- * registrado en getNotas().
- *
- * Solo conoce TablaCuartetas y TablaSimbolosGlobal (para las firmas) - no
- * ve nada de los 3 Visitor ni del AST.
+ * Lo no soportado no genera C invalido: se omite y queda en getNotas().
+ * Solo conoce TablaCuartetas y TablaSimbolosGlobal, no el AST.
  */
 public class GeneradorC {
 

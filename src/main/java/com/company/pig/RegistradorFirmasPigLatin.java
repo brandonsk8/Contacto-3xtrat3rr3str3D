@@ -19,28 +19,22 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Pasada 1 de un programa Pig Latin: a diferencia de Y? y Zetariano, un
- * archivo .pig no define ningun tipo ni funcion propia, solo IMPORTA
- * archivos .y/.z ya existentes. Por cada 'import', esta clase parsea el
- * archivo correspondiente y corre su propia pasada 1 (RegistradorFirmasY
- * o RegistradorFirmasZetariano) contra la MISMA TablaSimbolosGlobal
- * compartida, para que cualquier import pueda referenciar un tipo o
- * funcion de otro import.
+ * Pasada 1 de Pig Latin: un .pig no define tipos ni funciones propias,
+ * solo IMPORTA archivos .y/.z. Por cada 'import', parsea ese archivo y
+ * corre su propia pasada 1 (RegistradorFirmasY o RegistradorFirmasZetariano)
+ * contra la MISMA TablaSimbolosGlobal, para que cualquier import pueda
+ * referenciar un tipo o funcion de otro.
  *
- * Convencion de 'ruta': el ULTIMO segmento es la extension ('y' o 'z'),
- * el segmento anterior es el nombre de archivo, y los segmentos previos
- * son subcarpetas. Ej. 'Nodo.z' -> "Nodo.z" en el mismo directorio que
- * el .pig; 'utils.utils.y' -> "utils/utils.y".
+ * Convencion de 'ruta': el ultimo segmento es la extension ('y'/'z'), el
+ * anterior el nombre de archivo, y el resto subcarpetas. Ej. 'Nodo.z' ->
+ * "Nodo.z" junto al .pig; 'utils.utils.y' -> "utils/utils.y".
  *
- * Guarda el arbol (ProgramaContext) de cada archivo importado en un
- * ArchivoImportado, porque PigLatinAnalizador (pasada 2) todavia
- * necesita recorrer su cuerpo para generar las cuartetas, sin volver a
- * parsearlo.
+ * Guarda el arbol de cada import en un ArchivoImportado, porque
+ * PigLatinAnalizador (pasada 2) necesita recorrerlo sin volver a parsear.
  *
- * Limitacion conocida: los imports se procesan en el orden en que
- * aparecen en el .pig, uno completo a la vez. Si un import usa un tipo
- * de otro import que todavia no se proceso, se reportaria "tipo
- * desconocido" aunque exista mas adelante en la lista.
+ * Limitacion conocida: los imports se procesan en el orden del .pig, uno
+ * a la vez - un import que use un tipo de otro import posterior en la
+ * lista reportaria "tipo desconocido".
  */
 public class RegistradorFirmasPigLatin {
 

@@ -1,7 +1,7 @@
 grammar PigLatin;
 
 // ============================================================
-// Lenguaje Pig Latin (.pig) - punto de entrada del programa.
+// Lenguaje Pig Latin (.pig) - es el punto de entrada del programa.
 // Importa estructuras/funciones de archivos .y y clases de archivos .z.
 // Es case sensitive: 'finis' (minuscula, cierra si/dum) y 'FINIS'
 // (mayuscula, cierra la seccion MAIOR>) son tokens DISTINTOS.
@@ -102,6 +102,7 @@ sentencia
     | 'perge' ';'
     | imprimir
     | leer
+    | incrementoDecremento ';'
     | llamadaSentencia
     ;
 
@@ -151,13 +152,22 @@ cicloHacer
     : 'facere' cuerpo 'dum' '(' expresion ')' ';'
     ;
 
+// El 'finis' final es OPCIONAL (a diferencia de 'si'/'dum'): el propio
+// enunciado muestra el ciclo 'per' cerrando solo con '}', sin 'finis' ni
+// ';' extra - pero se acepta si algun archivo lo trae igual, por si acaso.
 cicloPara
-    : 'per' '(' forInit? ';' expresion? ';' forActualizacion? ')' cuerpo
+    : 'per' '(' forInit? ';' expresion? ';' forActualizacion? ')' cuerpo ( 'finis' ';' )?
     ;
 
+// OJO: a diferencia de 'declaracion' (usada en VARIABILES>), estas 2
+// alternativas de declaracion NO llevan su propio ';' - el ';' que
+// separa las 3 clausulas de 'per' ya lo pone cicloPara arriba, y si esta
+// regla tambien trajera uno se estaria pidiendo un doble ';' pegado
+// (esto i : numerus 0;; i < 10; ...), que ningun archivo real escribe.
 forInit
-    : declaracion
-    | asignacionSinFin
+    : 'esto' IDENTIFICADOR ':' inicializador                                 # forInitDeclaracionSimple
+    | 'series' IDENTIFICADOR '[' expresion ']' ':' tipoDato valoresArreglo?  # forInitDeclaracionArreglo
+    | asignacionSinFin                                                       # forInitAsignacion
     ;
 
 forActualizacion

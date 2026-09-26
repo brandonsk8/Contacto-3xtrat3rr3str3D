@@ -33,7 +33,7 @@ public class TablaSimbolos {
 
     /**
      * Declara un simbolo en ESTE ambito (no revisa los ambitos padre: un
-     * simbolo puede "tapar" (shadow) a otro de un ambito mas externo, eso
+     * simbolo puede "tapar" a otro de un ambito mas externo, eso
      * es valido; lo que no es valido es declarar dos veces el mismo
      * nombre en el mismo ambito).
      *

@@ -10,21 +10,16 @@ import java.util.Deque;
 import java.util.LinkedList;
 
 /**
- * Clase base del lexer de Y?, generada como superclase de YLexer
- * (ver YLexer.g4: "options { superClass = YLexerBase; }").
+ * Superclase de YLexer (YLexer.g4: "options { superClass = YLexerBase; }").
  *
- * Y? usa indentacion significativa para delimitar bloques (como
- * Python), en vez de llaves. ANTLR4 no soporta esto de forma nativa:
- * la gramatica NO puede "ver" cuantos espacios hay al inicio de una
- * linea de forma declarativa. La solucion estandar (la misma que usa
- * la gramatica oficial de Python3 en el repositorio antlr/grammars-v4)
- * es esta: sobreescribir nextToken() para interceptar cada salto de
- * linea real (NEWLINE_RAW, ver YLexer.g4) y, segun cuanto cambio la
- * indentacion respecto a la linea anterior, insertar tokens
- * sinteticos NEWLINE, INDENT y/o DEDENT antes de seguir.
+ * Y? usa indentacion significativa (como Python) en vez de llaves, y
+ * ANTLR4 no soporta eso de forma nativa. Solucion estandar (la misma
+ * que la gramatica oficial de Python3 en antlr/grammars-v4):
+ * sobreescribir nextToken() para interceptar cada NEWLINE_RAW y, segun
+ * cuanto cambio la indentacion, insertar NEWLINE/INDENT/DEDENT
+ * sinteticos antes de seguir.
  *
- * El parser (Y.g4) nunca ve NEWLINE_RAW: solo ve NEWLINE, INDENT y
- * DEDENT, como si fueran tokens normales.
+ * El parser (Y.g4) nunca ve NEWLINE_RAW, solo NEWLINE/INDENT/DEDENT.
  */
 public abstract class YLexerBase extends Lexer {
 

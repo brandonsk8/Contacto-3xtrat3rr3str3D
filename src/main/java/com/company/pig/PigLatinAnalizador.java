@@ -94,23 +94,32 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
 
     @Override
     public Operando visitDeclaracionSimple(PigLatinParser.DeclaracionSimpleContext ctx) {
-        String nombre = ctx.IDENTIFICADOR().getText();
-        int linea = ctx.getStart().getLine();
-        int columna = ctx.getStart().getCharPositionInLine();
+        return declararVariableSimple(ctx.IDENTIFICADOR().getText(), ctx.getStart().getLine(), ctx.getStart().getCharPositionInLine(),
+                ctx.inicializador(), ctx);
+    }
 
-        Operando resultado = visit(ctx.inicializador());
+    /** Mismo caso que visitDeclaracionSimple, pero para 'esto i : numerus 0' dentro del forInit de un 'per' (sin ';' propio - ver el .g4). */
+    @Override
+    public Operando visitForInitDeclaracionSimple(PigLatinParser.ForInitDeclaracionSimpleContext ctx) {
+        return declararVariableSimple(ctx.IDENTIFICADOR().getText(), ctx.getStart().getLine(), ctx.getStart().getCharPositionInLine(),
+                ctx.inicializador(), ctx);
+    }
+
+    private Operando declararVariableSimple(String nombre, int linea, int columna,
+                                            PigLatinParser.InicializadorContext inicializadorCtx, ParserRuleContext ctxError) {
+        Operando resultado = visit(inicializadorCtx);
         Tipo tipo = resultado.getTipo() != null ? resultado.getTipo() : Tipo.ERROR;
 
         Simbolo variable = new Simbolo(nombre, tipo, CategoriaSimbolo.VARIABLE, linea, columna);
         if (!ambitoActual.declarar(variable)) {
-            reportarError(ctx, "ya existe una variable llamada '" + nombre + "' en este ambito");
+            reportarError(ctxError, "ya existe una variable llamada '" + nombre + "' en este ambito");
             return null;
         }
 
-        if (ctx.inicializador() instanceof PigLatinParser.InicializadorEstructuraContext && tipo.getCategoria() == Tipo.Categoria.ESTRUCTURA) {
+        if (inicializadorCtx instanceof PigLatinParser.InicializadorEstructuraContext && tipo.getCategoria() == Tipo.Categoria.ESTRUCTURA) {
             SimboloEstructura estructura = global.buscarEstructura(tipo.getNombreDefinido());
-            PigLatinParser.InicializadorEstructuraContext initEstructura = (PigLatinParser.InicializadorEstructuraContext) ctx.inicializador();
-            inicializarValoresEstructura(estructura, initEstructura.valoresEstructura(), nombre, ctx);
+            PigLatinParser.InicializadorEstructuraContext initEstructura = (PigLatinParser.InicializadorEstructuraContext) inicializadorCtx;
+            inicializarValoresEstructura(estructura, initEstructura.valoresEstructura(), nombre, ctxError);
         } else if (resultado.getTexto() != null) {
             cuartetas.agregar("=", resultado.getTexto(), null, nombre);
         }
@@ -223,28 +232,40 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
 
     @Override
     public Operando visitDeclaracionArreglo(PigLatinParser.DeclaracionArregloContext ctx) {
-        String nombre = ctx.IDENTIFICADOR().getText();
-        int linea = ctx.getStart().getLine();
-        int columna = ctx.getStart().getCharPositionInLine();
+        return declararVariableArreglo(ctx.IDENTIFICADOR().getText(), ctx.getStart().getLine(), ctx.getStart().getCharPositionInLine(),
+                ctx.expresion(), ctx.tipoDato(), ctx.valoresArreglo(), ctx);
+    }
 
-        Operando tamano = visit(ctx.expresion());
+    /** Mismo caso que visitDeclaracionArreglo, pero para 'series i[n] : tipo' dentro del forInit de un 'per' (sin ';' propio - ver el .g4). */
+    @Override
+    public Operando visitForInitDeclaracionArreglo(PigLatinParser.ForInitDeclaracionArregloContext ctx) {
+        return declararVariableArreglo(ctx.IDENTIFICADOR().getText(), ctx.getStart().getLine(), ctx.getStart().getCharPositionInLine(),
+                ctx.expresion(), ctx.tipoDato(), ctx.valoresArreglo(), ctx);
+    }
+
+    private Operando declararVariableArreglo(String nombre, int linea, int columna,
+                                             PigLatinParser.ExpresionContext tamanoCtx,
+                                             PigLatinParser.TipoDatoContext tipoDatoCtx,
+                                             PigLatinParser.ValoresArregloContext valoresArregloCtx,
+                                             ParserRuleContext ctxError) {
+        Operando tamano = visit(tamanoCtx);
         if (tamano.esValor() && tamano.getTipo().getCategoria() != Tipo.Categoria.ENTERO) {
-            reportarError(ctx, "el tamano del arreglo debe ser entero, no " + tamano.getTipo());
+            reportarError(ctxError, "el tamano del arreglo debe ser entero, no " + tamano.getTipo());
         }
 
-        Tipo tipoElemento = resolvedorTipo.resolverTipoDato(ctx.tipoDato());
+        Tipo tipoElemento = resolvedorTipo.resolverTipoDato(tipoDatoCtx);
         Tipo tipoArreglo = Tipo.arreglo(tipoElemento, 1);
 
         Simbolo variable = new Simbolo(nombre, tipoArreglo, CategoriaSimbolo.VARIABLE, linea, columna);
         if (!ambitoActual.declarar(variable)) {
-            reportarError(ctx, "ya existe una variable llamada '" + nombre + "' en este ambito");
+            reportarError(ctxError, "ya existe una variable llamada '" + nombre + "' en este ambito");
             return null;
         }
 
         cuartetas.agregar("new_array", tipoElemento.toString(), tamano.esValor() ? tamano.getTexto() : "0", nombre);
 
-        if (ctx.valoresArreglo() != null && ctx.valoresArreglo().listaExpresiones() != null) {
-            List<PigLatinParser.ExpresionContext> valores = ctx.valoresArreglo().listaExpresiones().expresion();
+        if (valoresArregloCtx != null && valoresArregloCtx.listaExpresiones() != null) {
+            List<PigLatinParser.ExpresionContext> valores = valoresArregloCtx.listaExpresiones().expresion();
             for (int i = 0; i < valores.size(); i++) {
                 Operando v = visit(valores.get(i));
                 if (v.esValor()) {
@@ -273,6 +294,7 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
         if (ctx.PERGE() != null) return manejarPerge(ctx);
         if (ctx.imprimir() != null) return visit(ctx.imprimir());
         if (ctx.leer() != null) return visit(ctx.leer());
+        if (ctx.incrementoDecremento() != null) return visit(ctx.incrementoDecremento());
         if (ctx.llamadaSentencia() != null) return visit(ctx.llamadaSentencia());
         return null;
     }
@@ -285,6 +307,11 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
     @Override
     public Operando visitAsignacionSinFin(PigLatinParser.AsignacionSinFinContext ctx) {
         return manejarAsignacion(ctx, ctx.acceso(), ctx.expresion());
+    }
+
+    @Override
+    public Operando visitForInitAsignacion(PigLatinParser.ForInitAsignacionContext ctx) {
+        return visit(ctx.asignacionSinFin());
     }
 
     private Operando manejarAsignacion(ParserRuleContext ctx, PigLatinParser.AccesoContext accesoCtx, PigLatinParser.ExpresionContext expCtx) {
@@ -442,9 +469,10 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
         ambitoActual = new TablaSimbolos(ambitoAnterior);
 
         if (ctx.forInit() != null) {
-            PigLatinParser.ForInitContext init = ctx.forInit();
-            if (init.declaracion() != null) visit(init.declaracion());
-            else visit(init.asignacionSinFin());
+            // 'forInit' es ahora una regla con 3 alternativas etiquetadas
+            // (forInitDeclaracionSimple/forInitDeclaracionArreglo/forInitAsignacion)
+            // - visit() ya despacha sola a la que corresponda.
+            visit(ctx.forInit());
         }
 
         String etiquetaInicio = cuartetas.nuevaEtiqueta();

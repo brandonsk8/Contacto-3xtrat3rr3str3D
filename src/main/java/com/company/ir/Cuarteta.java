@@ -1,17 +1,11 @@
 package com.company.ir;
-
 /**
- * Representa una cuarteta de codigo de tres direcciones (C3D):
- *   (operador, argumento1, argumento2, resultado)
+ * Una cuarteta de codigo de tres direcciones (C3D): (operador, arg1,
+ * arg2, resultado). Ej: "t0 = a + b" -> new Cuarteta("+", "a", "b", "t0").
  *
- * Ejemplos de uso una vez tengamos las gramaticas conectadas:
- *   t0 = a + b        -> new Cuarteta("+", "a", "b", "t0")
- *   if_false t2 goto L1 -> new Cuarteta("if_false", "t2", null, "L1")
- *   goto L0            -> new Cuarteta("goto", null, null, "L0")
- *
- * Esta clase es intencionalmente independiente de Y?, Zetariano y Pig Latin:
- * los tres lenguajes generan instancias de Cuarteta, y el generador de
- * bytecode/C solo conoce este modelo, no los AST de origen.
+ * Independiente de Y?/Zetariano/Pig Latin: los 3 lenguajes generan
+ * instancias de Cuarteta, y el backend solo conoce este modelo, no los
+ * AST de origen.
  */
 public class Cuarteta {
 
