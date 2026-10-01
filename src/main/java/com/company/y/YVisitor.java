@@ -497,14 +497,18 @@ public class YVisitor extends YParserBaseVisitor<Operando> {
         return new Operando(resultado, temporal);
     }
 
-    @Override
     public Operando visitExpRelacional(YParser.ExpRelacionalContext ctx) {
         Operando izq = visit(ctx.expresion(0));
         Operando der = visit(ctx.expresion(1));
         if (!izq.esValor() || !der.esValor()) {
             return Operando.error();
         }
-        if (!izq.getTipo().esNumerico() || !der.getTipo().esNumerico()) {
+        // Ademas de numericos, se permite comparar caracter con caracter
+        // (en C un 'char' ya es un entero chico, asi que '<'/'>' funcionan
+        // igual sin ningun caso especial en el backend).
+        boolean ambosCaracter = izq.getTipo().getCategoria() == Tipo.Categoria.CARACTER
+                && der.getTipo().getCategoria() == Tipo.Categoria.CARACTER;
+        if (!ambosCaracter && (!izq.getTipo().esNumerico() || !der.getTipo().esNumerico())) {
             reportarError(ctx, "'" + ctx.op.getText() + "' solo aplica entre valores numericos, no " + izq.getTipo() + " y " + der.getTipo());
             return Operando.error();
         }
