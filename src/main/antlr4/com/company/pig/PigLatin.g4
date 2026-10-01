@@ -1,7 +1,7 @@
 grammar PigLatin;
 
 // ============================================================
-// Lenguaje Pig Latin (.pig) - es el punto de entrada del programa.
+// Lenguaje Pig Latin (.pig) - punto de entrada del programa.
 // Importa estructuras/funciones de archivos .y y clases de archivos .z.
 // Es case sensitive: 'finis' (minuscula, cierra si/dum) y 'FINIS'
 // (mayuscula, cierra la seccion MAIOR>) son tokens DISTINTOS.
@@ -44,7 +44,12 @@ declaracion
 
 inicializador
     : tipoPrimitivo expresion              # inicializadorPrimitivo
-    | ( 'verum' | 'falsus' )               # inicializadorBooleano
+    // El 'bool' antes de 'verum'/'falsus' es OPCIONAL y se ignora: a
+    // diferencia de numerus/textum/decimalis/littera, un booleano no
+    // necesita palabra de tipo delante (el propio literal alcanza), pero
+    // se acepta si algun archivo lo trae igual, por si acaso (mismo
+    // criterio que el 'finis' opcional de 'per').
+    | 'bool'? ( 'verum' | 'falsus' )        # inicializadorBooleano
     | IDENTIFICADOR valoresEstructura      # inicializadorEstructura
     | 'novus' IDENTIFICADOR '(' listaArgumentos? ')'  # inicializadorObjeto
     ;
@@ -223,6 +228,7 @@ expresion
     | expresion '&&' expresion                              # expAnd
     | expresion '||' expresion                               # expOr
     | '(' expresion ')'                                      # expParentesis
+    | 'novus' IDENTIFICADOR '(' listaArgumentos? ')'         # expObjetoNuevo
     | acceso                                                 # expAcceso
     | literal                                                # expLiteral
     ;
@@ -317,6 +323,16 @@ CARACTER
 // encabezados de seccion tipo "##  Importaciones ... ##"
 COMENTARIO
     : '##' .*? '##' -> skip
+    ;
+
+// Estilos de comentario adicionales (estilo C/Java), aceptados ademas del
+// '##...##' propio del lenguaje, por si algun archivo los trae igual.
+COMENTARIO_LINEA
+    : '//' ~[\r\n]* -> skip
+    ;
+
+COMENTARIO_BLOQUE
+    : '/*' .*? '*/' -> skip
     ;
 
 ESPACIO

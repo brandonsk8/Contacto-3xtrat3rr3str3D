@@ -142,7 +142,11 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
 
     @Override
     public Operando visitInicializadorBooleano(PigLatinParser.InicializadorBooleanoContext ctx) {
-        return new Operando(Tipo.BOOLEANO, ctx.getText());
+        // El 'bool' opcional de adelante (ver PigLatin.g4) no forma parte
+        // del valor: si se usara ctx.getText() tal cual, con 'bool'
+        // presente devolveria "boolfalsus" pegado en vez de "falsus".
+        String texto = ctx.VERUM() != null ? ctx.VERUM().getText() : ctx.FALSUS().getText();
+        return new Operando(Tipo.BOOLEANO, texto);
     }
 
     @Override
@@ -160,6 +164,21 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
 
     @Override
     public Operando visitInicializadorObjeto(PigLatinParser.InicializadorObjetoContext ctx) {
+        String nombreClase = ctx.IDENTIFICADOR().getText();
+        SimboloClase clase = global.buscarClase(nombreClase);
+        if (clase == null) {
+            reportarError(ctx, "'" + nombreClase + "' no es una clase conocida (revisa los 'import')");
+            return Operando.error();
+        }
+        String temporal = resolverNuevoObjeto(clase, ctx.listaArgumentos(), ctx);
+        return new Operando(Tipo.clase(nombreClase), temporal);
+    }
+
+    @Override
+    public Operando visitExpObjetoNuevo(PigLatinParser.ExpObjetoNuevoContext ctx) {
+        // Mismo caso que 'visitInicializadorObjeto' (arriba), pero usado
+        // dentro de una expresion general (ej. reasignar 'juego = novus
+        // Juego(nombre);'), no solo en la declaracion inicial.
         String nombreClase = ctx.IDENTIFICADOR().getText();
         SimboloClase clase = global.buscarClase(nombreClase);
         if (clase == null) {

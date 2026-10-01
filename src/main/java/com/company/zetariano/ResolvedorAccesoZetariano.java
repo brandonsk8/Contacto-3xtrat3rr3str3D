@@ -73,6 +73,16 @@ public class ResolvedorAccesoZetariano {
                 tipoActual = variable.getTipo();
                 textoActual = nombreBase;
             } else if (!sufijos.isEmpty() && tipoDeSufijo(sufijos.get(0)) == SUFIJO_LLAMADA) {
+                // 'println'/'print' son funciones globales de impresion (igual
+                // que 'imprimir' en Y?), no un metodo de la clase - se
+                // resuelven ANTES de asumir que es this.nombreBase(...).
+                if (nombreBase.equals("println") || nombreBase.equals("print")) {
+                    if (sufijos.size() > 1) {
+                        reportarErrorEn(linea, columna, "no se puede seguir accediendo despues de '" + nombreBase + "(...)'");
+                        return Operando.error();
+                    }
+                    return resolverLlamadaImpresion(sufijos.get(0), linea, columna);
+                }
                 // No es variable/parametro: es una llamada a un metodo
                 // PROPIO sin 'this.' explicito (equivale a this.nombreBase(...)).
                 return resolverLlamadaImplicita(nombreBase, sufijos, linea, columna, claseActual);
@@ -153,6 +163,33 @@ public class ResolvedorAccesoZetariano {
         }
 
         return new Operando(tipoActual, textoActual);
+    }
+
+    /**
+     * 'println'/'print' - funcion global de impresion de Zetariano (no es
+     * un metodo de ninguna clase). Cada argumento genera su propia cuarteta
+     * "print", igual que 'imprimir()' en Y? - por eso, igual que alla, no
+     * hay distincion real entre 'print' (sin salto de linea) y 'println'
+     * (con salto): el backend (EmisorSentencias, caso "print") siempre
+     * emite un printf con '\n' al final. Es una limitacion conocida: varias
+     * llamadas a 'print' seguidas van a salir en lineas separadas en vez de
+     * concatenadas en una sola linea.
+     */
+    private Operando resolverLlamadaImpresion(ZetarianoParser.SufijoAccesoContext sufijoLlamada, int linea, int columna) {
+        List<ZetarianoParser.ExpresionContext> argsCtx = sufijoLlamada.listaArgumentos() != null
+                ? sufijoLlamada.listaArgumentos().expresion() : Collections.<ZetarianoParser.ExpresionContext>emptyList();
+        if (argsCtx.isEmpty()) {
+            reportarErrorEn(linea, columna, "'println'/'print' necesita al menos un argumento");
+            return Operando.error();
+        }
+        for (ZetarianoParser.ExpresionContext a : argsCtx) {
+            Operando arg = visitor.visit(a);
+            if (!arg.esValor()) {
+                return Operando.error();
+            }
+            cuartetas.agregar("print", arg.getTexto(), null, null);
+        }
+        return Operando.sinValor();
     }
 
     private Operando resolverLlamadaImplicita(String nombreMetodo, List<ZetarianoParser.SufijoAccesoContext> sufijos,

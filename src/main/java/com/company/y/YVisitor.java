@@ -11,7 +11,7 @@ import com.company.semantico.TablaSimbolos;
 import com.company.semantico.TablaSimbolosGlobal;
 import com.company.semantico.Tipo;
 import org.antlr.v4.runtime.ParserRuleContext;
-
+import com.company.ir.Cuarteta;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -136,7 +136,20 @@ public class YVisitor extends YParserBaseVisitor<Operando> {
             YParser.InicializadorContext init = ctx.inicializador();
             if (init.expresion() != null) {
                 Operando valor = visit(init.expresion());
-                if (valor.esValor() && !tipoFinal.esCompatibleCon(valor.getTipo())) {
+                // 'leer()' siempre se tipa como cadena, pero si el resultado se
+                // asigna DIRECTO a una variable numerica, el backend ya sabe leer
+                // un entero/decimal con scanf usando el tipo de la variable destino.
+                List<Cuarteta> generadas = cuartetas.getCuartetas();
+                boolean esLecturaNumericaDirecta = valor.esValor()
+                        && tipoFinal.esNumerico()
+                        && valor.getTipo().getCategoria() == Tipo.Categoria.CADENA
+                        && !generadas.isEmpty()
+                        && "read".equals(generadas.get(generadas.size() - 1).getOperador())
+                        && valor.getTexto().equals(generadas.get(generadas.size() - 1).getResultado());
+
+                if (esLecturaNumericaDirecta) {
+                    cuartetas.agregar("=", valor.getTexto(), null, nombre);
+                } else if (valor.esValor() && !tipoFinal.esCompatibleCon(valor.getTipo())) {
                     reportarError(ctx, "no se puede inicializar '" + nombre + "' (" + tipoFinal + ") con un valor de tipo " + valor.getTipo());
                 } else if (valor.esValor()) {
                     cuartetas.agregar("=", valor.getTexto(), null, nombre);
@@ -438,7 +451,33 @@ public class YVisitor extends YParserBaseVisitor<Operando> {
 
     @Override
     public Operando visitExpAditiva(YParser.ExpAditivaContext ctx) {
-        return operacionAritmetica(ctx, ctx.expresion(0), ctx.expresion(1), ctx.op.getText());
+        String op = ctx.op.getText();
+        // Solo '+' esta sobrecargado para concatenar: si cualquiera de los
+        // dos lados es cadena, el resultado es cadena (el otro se convierte
+        // automaticamente - el backend ya sabe hacerlo, igual que en
+        // Zetariano con su mismo operador 'concat').
+        if (op.equals("+")) {
+            Operando izq = visit(ctx.expresion(0));
+            Operando der = visit(ctx.expresion(1));
+            if (!izq.esValor() || !der.esValor()) {
+                return Operando.error();
+            }
+            if (izq.getTipo().getCategoria() == Tipo.Categoria.CADENA || der.getTipo().getCategoria() == Tipo.Categoria.CADENA) {
+                String temporal = cuartetas.nuevoTemporal();
+                cuartetas.agregar("concat", izq.getTexto(), der.getTexto(), temporal);
+                return new Operando(Tipo.CADENA, temporal);
+            }
+            if (!izq.getTipo().esNumerico() || !der.getTipo().esNumerico()) {
+                reportarError(ctx, "'" + op + "' solo aplica entre valores numericos, no " + izq.getTipo() + " y " + der.getTipo());
+                return Operando.error();
+            }
+            Tipo resultado = (izq.getTipo().getCategoria() == Tipo.Categoria.DECIMAL || der.getTipo().getCategoria() == Tipo.Categoria.DECIMAL)
+                    ? Tipo.DECIMAL : Tipo.ENTERO;
+            String temporal = cuartetas.nuevoTemporal();
+            cuartetas.agregar(op, izq.getTexto(), der.getTexto(), temporal);
+            return new Operando(resultado, temporal);
+        }
+        return operacionAritmetica(ctx, ctx.expresion(0), ctx.expresion(1), op);
     }
 
     private Operando operacionAritmetica(ParserRuleContext ctx, YParser.ExpresionContext ei, YParser.ExpresionContext ed, String op) {
