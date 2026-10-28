@@ -47,6 +47,8 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
     private SimboloClase claseActual;
     private SimboloInvocable invocableActual;
     private List<ZetarianoParser.DeclaracionCampoContext> camposConInicializador = Collections.emptyList();
+    /** Bloque de constructor cuya primera sentencia ('super(...)') ya se proceso aparte. */
+    private ZetarianoParser.BloqueContext bloqueConSuperProcesado;
 
     // {etiquetaContinuar, etiquetaFin} del ciclo/switch mas interno;
     // etiquetaContinuar es null para un 'switch' ('continue' ahi es invalido).
@@ -84,6 +86,9 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
         for (ZetarianoParser.ConstructorContext c : constructores) {
             analizarConstructor(c);
         }
+        if (constructores.isEmpty()) {
+            analizarConstructorPorDefecto(ctx);
+        }
         for (ZetarianoParser.MetodoContext m : metodos) {
             analizarMetodo(m);
         }
@@ -110,12 +115,78 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
         }
         constructor.setAmbitoLocal(ambitoActual);
 
-        cuartetas.agregar("label", null, null, "ctor_" + claseActual.getNombre() + "_" + tipos.size());
+        cuartetas.agregar("label", null, null, com.company.semantico.Etiquetas.ctor(claseActual, constructor));
+
+        // Orden de Java: primero el constructor del padre ('super(...)' explicito o implicito),
+        // despues los inicializadores de campos, despues el resto del cuerpo.
+        ZetarianoParser.AccesoContext llamadaThis = primeraSentenciaEsLlamadaA(ctx.bloque(), "this");
+        ZetarianoParser.AccesoContext llamadaSuper = llamadaThis == null ? primeraSentenciaEsSuper(ctx.bloque()) : null;
+        if (llamadaThis != null) {
+            // 'this(...)': el otro constructor ya hace super(), los inicializadores de campos y su cuerpo.
+            resolvedorAcceso.resolverLlamadaThisConstructor(llamadaThis.sufijoAcceso(0).listaArgumentos(), claseActual, constructor,
+                    llamadaThis.getStart().getLine(), llamadaThis.getStart().getCharPositionInLine());
+            bloqueConSuperProcesado = ctx.bloque();
+            visit(ctx.bloque());
+            bloqueConSuperProcesado = null;
+            invocableActual = invocableAnterior;
+            ambitoActual = ambitoAnterior;
+            return;
+        }
+        if (llamadaSuper != null) {
+            ZetarianoParser.ListaArgumentosContext args = llamadaSuper.sufijoAcceso(0).listaArgumentos();
+            resolvedorAcceso.resolverLlamadaSuperConstructor(args, claseActual,
+                    llamadaSuper.getStart().getLine(), llamadaSuper.getStart().getCharPositionInLine());
+            bloqueConSuperProcesado = ctx.bloque();
+        } else {
+            resolvedorAcceso.resolverSuperImplicito(claseActual, ctx.getStart().getLine(), ctx.getStart().getCharPositionInLine());
+        }
         emitirInicializacionesDeCampos();
         visit(ctx.bloque());
+        bloqueConSuperProcesado = null;
 
         invocableActual = invocableAnterior;
         ambitoActual = ambitoAnterior;
+    }
+
+    /** Clase sin constructores: el constructor por defecto (publico, sin parametros) llama a super() y corre los inicializadores. */
+    private void analizarConstructorPorDefecto(ZetarianoParser.ProgramaContext ctx) {
+        SimboloInvocable constructor = buscarPorFirma(claseActual.getConstructores(), new ArrayList<>());
+        if (constructor == null) {
+            return;
+        }
+        SimboloInvocable invocableAnterior = invocableActual;
+        TablaSimbolos ambitoAnterior = ambitoActual;
+        invocableActual = constructor;
+        ambitoActual = new TablaSimbolos(null);
+        constructor.setAmbitoLocal(ambitoActual);
+
+        cuartetas.agregar("label", null, null, com.company.semantico.Etiquetas.ctor(claseActual, constructor));
+        resolvedorAcceso.resolverSuperImplicito(claseActual, ctx.getStart().getLine(), ctx.getStart().getCharPositionInLine());
+        emitirInicializacionesDeCampos();
+
+        invocableActual = invocableAnterior;
+        ambitoActual = ambitoAnterior;
+    }
+
+    /** Si la primera sentencia del bloque es exactamente 'super(...);' devuelve ese acceso, si no null. */
+    private ZetarianoParser.AccesoContext primeraSentenciaEsSuper(ZetarianoParser.BloqueContext bloque) {
+        return primeraSentenciaEsLlamadaA(bloque, "super");
+    }
+
+    private ZetarianoParser.AccesoContext primeraSentenciaEsLlamadaA(ZetarianoParser.BloqueContext bloque, String palabra) {
+        if (bloque.sentencia().isEmpty()) {
+            return null;
+        }
+        ZetarianoParser.SentenciaContext primera = bloque.sentencia(0);
+        if (primera.llamada() == null) {
+            return null;
+        }
+        ZetarianoParser.AccesoContext acceso = primera.llamada().acceso();
+        if (acceso.getChild(0).getText().equals(palabra) && acceso.sufijoAcceso().size() == 1
+                && acceso.sufijoAcceso(0).getChild(0).getText().equals("(")) {
+            return acceso;
+        }
+        return null;
     }
 
     private void analizarMetodo(ZetarianoParser.MetodoContext ctx) {
@@ -138,7 +209,7 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
         }
         metodo.setAmbitoLocal(ambitoActual);
 
-        cuartetas.agregar("label", null, null, "metodo_" + claseActual.getNombre() + "_" + nombre + "_" + tipos.size());
+        cuartetas.agregar("label", null, null, com.company.semantico.Etiquetas.metodo(claseActual, metodo));
         visit(ctx.bloque());
 
         invocableActual = invocableAnterior;
@@ -156,17 +227,39 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
             ZetarianoParser.InicializadorContext init = campoCtx.inicializador();
             if (init.expresion() != null) {
                 Operando valor = visit(init.expresion());
-                if (valor.esValor() && !campo.getTipo().esCompatibleCon(valor.getTipo())) {
+                if (valor.esValor() && !campo.getTipo().esCompatibleConPolimorfismo(valor.getTipo(), global)) {
                     reportarError(campoCtx, "no se puede inicializar el campo '" + nombreCampo + "' (" + campo.getTipo() + ") con un valor de tipo " + valor.getTipo());
                 } else if (valor.esValor()) {
                     cuartetas.agregar("=", valor.getTexto(), null, "this." + nombreCampo);
                 }
             } else if (init.listaExpresiones() != null) {
-                // Se validan los elementos por separado, no la lista completa.
-                for (ZetarianoParser.ExpresionContext e : init.listaExpresiones().expresion()) {
-                    visit(e);
-                }
+                inicializarArregloConLista("this." + nombreCampo, campo.getTipo(), init.listaExpresiones().expresion());
             }
+        }
+    }
+
+    /**
+     * 'int[] a = {1, 2, 3}': se valida cada elemento por separado y, para un arreglo de
+     * una dimension, se emite la reserva del arreglo y la asignacion de cada elemento.
+     */
+    private void inicializarArregloConLista(String destino, Tipo tipo, List<ZetarianoParser.ExpresionContext> elementos) {
+        List<String> valores = new ArrayList<>();
+        for (ZetarianoParser.ExpresionContext e : elementos) {
+            Operando v = visit(e);
+            if (v.esValor()) {
+                valores.add(v.getTexto());
+            }
+        }
+        if (tipo.getCategoria() != Tipo.Categoria.ARREGLO || tipo.getDimensiones() != 1 || valores.size() != elementos.size()) {
+            return;
+        }
+        String temporal = destino.indexOf('.') < 0 ? destino : cuartetas.nuevoTemporal();
+        cuartetas.agregar("new_array", tipo.getTipoBase().toString(), String.valueOf(valores.size()), temporal);
+        if (!temporal.equals(destino)) {
+            cuartetas.agregar("=", temporal, null, destino);
+        }
+        for (int i = 0; i < valores.size(); i++) {
+            cuartetas.agregar("=", valores.get(i), null, destino + "[" + i + "]");
         }
     }
 
@@ -197,7 +290,12 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
         // aparezca (cuerpo de metodo, de un 'if', un bloque suelto, etc.)
         TablaSimbolos anterior = ambitoActual;
         ambitoActual = new TablaSimbolos(anterior);
+        boolean saltarPrimera = ctx == bloqueConSuperProcesado;
         for (ZetarianoParser.SentenciaContext s : ctx.sentencia()) {
+            if (saltarPrimera) {
+                saltarPrimera = false; // 'super(...)' ya se emitio antes de los inicializadores de campos
+                continue;
+            }
             visit(s);
         }
         ambitoActual = anterior;
@@ -238,20 +336,22 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
             reportarError(ctx, "ya existe una variable llamada '" + nombre + "' en este ambito");
             return null;
         }
+        // el backend necesita el tipo DECLARADO (no solo el del valor inicial: 'Combatiente c = null;')
+        if (tipo.getCategoria() != Tipo.Categoria.ERROR) {
+            cuartetas.agregar("decl", tipo.toString(), null, nombre);
+        }
 
         if (ctx.inicializador() != null) {
             ZetarianoParser.InicializadorContext init = ctx.inicializador();
             if (init.expresion() != null) {
                 Operando valor = visit(init.expresion());
-                if (valor.esValor() && !tipo.esCompatibleCon(valor.getTipo())) {
+                if (valor.esValor() && !tipo.esCompatibleConPolimorfismo(valor.getTipo(), global)) {
                     reportarError(ctx, "no se puede inicializar '" + nombre + "' (" + tipo + ") con un valor de tipo " + valor.getTipo());
                 } else if (valor.esValor()) {
                     cuartetas.agregar("=", valor.getTexto(), null, nombre);
                 }
             } else if (init.listaExpresiones() != null) {
-                for (ZetarianoParser.ExpresionContext e : init.listaExpresiones().expresion()) {
-                    visit(e);
-                }
+                inicializarArregloConLista(nombre, tipo, init.listaExpresiones().expresion());
             }
         }
         return null;
@@ -269,7 +369,7 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
         // '+=' sobre una cadena es concatenacion, el lado derecho puede ser de cualquier tipo.
         boolean esConcatenacion = op.equals("+=") && destino.getTipo().getCategoria() == Tipo.Categoria.CADENA;
 
-        if (!esConcatenacion && !destino.getTipo().esCompatibleCon(valor.getTipo())) {
+        if (!esConcatenacion && !destino.getTipo().esCompatibleConPolimorfismo(valor.getTipo(), global)) {
             reportarError(ctx, "no se puede asignar un valor de tipo " + valor.getTipo() + " a '" + destino.getTexto() + "' (" + destino.getTipo() + ")");
             return null;
         }
@@ -318,12 +418,18 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
     }
 
     private Operando manejarContinue(ZetarianoParser.SentenciaContext ctx) {
-        if (pilaCiclos.isEmpty()) {
+        // 'continue' dentro de un switch/elegir afecta al ciclo que lo rodea (como en Java/C)
+        String destinoContinue = null;
+        for (String[] entrada : pilaCiclos) { // del mas interno al mas externo
+            if (entrada[0] != null) {
+                destinoContinue = entrada[0];
+                break;
+            }
+        }
+        if (destinoContinue == null) {
             reportarError(ctx, "'continue' fuera de un ciclo");
-        } else if (pilaCiclos.peek()[0] == null) {
-            reportarError(ctx, "'continue' no es valido dentro de un 'switch'");
         } else {
-            cuartetas.agregar("goto", null, null, pilaCiclos.peek()[0]);
+            cuartetas.agregar("goto", null, null, destinoContinue);
         }
         return null;
     }
@@ -334,7 +440,7 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
             Operando valor = visit(ctx.expresion());
             if (esperado.getCategoria() == Tipo.Categoria.VOID) {
                 reportarError(ctx, "esto no retorna nada, no puede llevar 'return <valor>'");
-            } else if (valor.esValor() && !esperado.esCompatibleCon(valor.getTipo())) {
+            } else if (valor.esValor() && !esperado.esCompatibleConPolimorfismo(valor.getTipo(), global)) {
                 reportarError(ctx, "'return' espera " + esperado + ", se recibio " + valor.getTipo());
             }
             if (valor.esValor()) {
@@ -625,7 +731,15 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
     }
 
     private Operando operacionLogica(ParserRuleContext ctx, ZetarianoParser.ExpresionContext ei, ZetarianoParser.ExpresionContext ed, String op) {
+        // Cortocircuito (como Java/C): el lado derecho solo se evalua si hace falta,
+        // asi 'x != null && x.activo()' no llama a un metodo sobre null.
         Operando izq = visit(ei);
+        String temporal = cuartetas.nuevoTemporal();
+        String etiquetaFin = cuartetas.nuevaEtiqueta();
+        if (izq.esValor()) {
+            cuartetas.agregar("=", izq.getTexto(), null, temporal);
+            cuartetas.agregar("&&".equals(op) ? "if_false" : "if_true", temporal, null, etiquetaFin);
+        }
         Operando der = visit(ed);
         if (!izq.esValor() || !der.esValor()) {
             return Operando.error();
@@ -634,16 +748,33 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
             reportarError(ctx, "'" + op + "' solo aplica entre valores booleanos, no " + izq.getTipo() + " y " + der.getTipo());
             return Operando.error();
         }
-        String temporal = cuartetas.nuevoTemporal();
-        cuartetas.agregar(op, izq.getTexto(), der.getTexto(), temporal);
+        cuartetas.agregar("=", der.getTexto(), null, temporal);
+        cuartetas.agregar("label", null, null, etiquetaFin);
         return new Operando(Tipo.BOOLEANO, temporal);
     }
 
     @Override
     public Operando visitExpTernaria(ZetarianoParser.ExpTernariaContext ctx) {
         Operando cond = visit(ctx.expresion(0));
+        // 'cond ? a : b' se traduce con saltos, como un if/else que carga un temporal:
+        // cada rama solo se evalua si le toca (por ejemplo 'p != null ? p.x : 0').
+        String temporal = cuartetas.nuevoTemporal();
+        String etiquetaFalso = cuartetas.nuevaEtiqueta();
+        String etiquetaFin = cuartetas.nuevaEtiqueta();
+        if (cond.esValor()) {
+            cuartetas.agregar("if_false", cond.getTexto(), null, etiquetaFalso);
+        }
         Operando siVerdadero = visit(ctx.expresion(1));
+        if (siVerdadero.esValor()) {
+            cuartetas.agregar("=", siVerdadero.getTexto(), null, temporal);
+        }
+        cuartetas.agregar("goto", null, null, etiquetaFin);
+        cuartetas.agregar("label", null, null, etiquetaFalso);
         Operando siFalso = visit(ctx.expresion(2));
+        if (siFalso.esValor()) {
+            cuartetas.agregar("=", siFalso.getTexto(), null, temporal);
+        }
+        cuartetas.agregar("label", null, null, etiquetaFin);
         if (!cond.esValor() || !siVerdadero.esValor() || !siFalso.esValor()) {
             return Operando.error();
         }
@@ -657,17 +788,6 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
             return Operando.error();
         }
         Tipo resultado = siVerdadero.getTipo().esCompatibleCon(siFalso.getTipo()) ? siVerdadero.getTipo() : siFalso.getTipo();
-
-        // 'cond ? a : b' se traduce con saltos, como un if/else que carga un temporal.
-        String temporal = cuartetas.nuevoTemporal();
-        String etiquetaFalso = cuartetas.nuevaEtiqueta();
-        String etiquetaFin = cuartetas.nuevaEtiqueta();
-        cuartetas.agregar("if_false", cond.getTexto(), null, etiquetaFalso);
-        cuartetas.agregar("=", siVerdadero.getTexto(), null, temporal);
-        cuartetas.agregar("goto", null, null, etiquetaFin);
-        cuartetas.agregar("label", null, null, etiquetaFalso);
-        cuartetas.agregar("=", siFalso.getTexto(), null, temporal);
-        cuartetas.agregar("label", null, null, etiquetaFin);
         return new Operando(resultado, temporal);
     }
 
@@ -696,6 +816,14 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
         }
         SimboloInvocable constructor = buscarPorFirma(clase.getConstructores(), tipos);
         if (constructor == null) {
+            for (SimboloInvocable c : clase.getConstructores()) {
+                if (c.aceptaArgumentos(tipos, global)) {
+                    constructor = c;
+                    break;
+                }
+            }
+        }
+        if (constructor == null) {
             reportarError(ctx, "'" + nombreClase + "' no tiene un constructor que reciba esos argumentos");
             return Operando.error();
         }
@@ -704,7 +832,7 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
             cuartetas.agregar("param", a.getTexto(), null, null);
         }
         String temporal = cuartetas.nuevoTemporal();
-        cuartetas.agregar("new", nombreClase, String.valueOf(args.size()), temporal);
+        cuartetas.agregar("new", nombreClase + "#" + com.company.semantico.Etiquetas.firma(constructor), String.valueOf(args.size()), temporal);
         return new Operando(Tipo.clase(nombreClase), temporal);
     }
 
@@ -737,6 +865,37 @@ public class ZetarianoAnalizador extends ZetarianoBaseVisitor<Operando> {
     @Override
     public Operando visitExpParentesis(ZetarianoParser.ExpParentesisContext ctx) {
         return visit(ctx.expresion());
+    }
+
+    @Override
+    public Operando visitExpPreIncremento(ZetarianoParser.ExpPreIncrementoContext ctx) {
+        return incrementoEnExpresion(ctx.acceso(), ctx.op.getText(), true, ctx);
+    }
+
+    @Override
+    public Operando visitExpPostIncremento(ZetarianoParser.ExpPostIncrementoContext ctx) {
+        return incrementoEnExpresion(ctx.acceso(), ctx.op.getText(), false, ctx);
+    }
+
+    /** '++k' (valor DESPUES de sumar) y 'k++' (valor ANTES): el resultado se copia a un temporal. */
+    private Operando incrementoEnExpresion(ZetarianoParser.AccesoContext acceso, String operador, boolean prefijo, ParserRuleContext ctx) {
+        Operando destino = resolvedorAcceso.resolverAcceso(acceso, ambitoActual, claseActual);
+        if (!destino.esValor()) {
+            return Operando.error();
+        }
+        if (!destino.getTipo().esNumerico()) {
+            reportarError(ctx, "'" + operador + "' solo aplica a valores numericos, no a " + destino.getTipo());
+            return Operando.error();
+        }
+        String temporal = cuartetas.nuevoTemporal();
+        if (!prefijo) {
+            cuartetas.agregar("=", destino.getTexto(), null, temporal);
+        }
+        cuartetas.agregar(operador, destino.getTexto(), null, destino.getTexto());
+        if (prefijo) {
+            cuartetas.agregar("=", destino.getTexto(), null, temporal);
+        }
+        return new Operando(destino.getTipo(), temporal);
     }
 
     @Override

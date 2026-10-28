@@ -9,6 +9,7 @@ import com.company.semantico.SimboloInvocable;
 import com.company.semantico.TablaSimbolos;
 import com.company.semantico.TablaSimbolosGlobal;
 import com.company.semantico.Tipo;
+import com.company.semantico.Visibilidad;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -36,6 +37,7 @@ public class ResolvedorAccesoZetariano {
     private final TablaCuartetas cuartetas;
     private final ZetarianoAnalizador visitor;
 
+    // Resuelve accesos a campos, metodos, this/super y .length.
     public ResolvedorAccesoZetariano(TablaSimbolosGlobal global, GestorErrores errores, TablaCuartetas cuartetas, ZetarianoAnalizador visitor) {
         this.global = global;
         this.errores = errores;
@@ -43,6 +45,7 @@ public class ResolvedorAccesoZetariano {
         this.visitor = visitor;
     }
 
+    // Clasifica un sufijo: campo, indice o llamada.
     private int tipoDeSufijo(ZetarianoParser.SufijoAccesoContext ctx) {
         String primero = ctx.getChild(0).getText();
         if (primero.equals(".")) return SUFIJO_CAMPO;
@@ -58,8 +61,37 @@ public class ResolvedorAccesoZetariano {
 
         Tipo tipoActual;
         String textoActual;
+        int inicioSufijos = 0;
 
-        if (ctx.getChild(0).getText().equals("this")) {
+        if (ctx.getChild(0).getText().equals("super")) {
+            SimboloClase padre = claseActual != null ? claseActual.getSuperclase(global) : null;
+            if (padre == null) {
+                reportarError(ctx, "'super' solo se puede usar dentro de una clase que hereda de otra ('extends')");
+                return Operando.error();
+            }
+            if (sufijos.isEmpty() || tipoDeSufijo(sufijos.get(0)) != SUFIJO_CAMPO) {
+                reportarError(ctx, "'super(...)' solo puede ser la primera sentencia de un constructor");
+                return Operando.error();
+            }
+            tipoActual = Tipo.clase(padre.getNombre());
+            textoActual = "this";
+            boolean esLlamadaASuper = sufijos.size() >= 2 && tipoDeSufijo(sufijos.get(1)) == SUFIJO_LLAMADA;
+            if (esLlamadaASuper) {
+                // super.metodo(...): llama a la version del padre, sin despacho dinamico
+                Operando resultado = resolverLlamadaMetodo(padre, sufijos.get(0).IDENTIFICADOR().getText(), "this", sufijos.get(1),
+                        linea, columna, claseActual, true);
+                if (resultado.esError() || !resultado.esValor()) {
+                    if (resultado.esValor() == false && !resultado.esError() && sufijos.size() > 2) {
+                        reportarError(sufijos.get(2), "no se puede seguir accediendo despues de llamar a un metodo 'void'");
+                        return Operando.error();
+                    }
+                    return resultado;
+                }
+                tipoActual = resultado.getTipo();
+                textoActual = resultado.getTexto();
+                inicioSufijos = 2;
+            }
+        } else if (ctx.getChild(0).getText().equals("this")) {
             if (claseActual == null) {
                 reportarError(ctx, "'this' no se puede usar aqui");
                 return Operando.error();
@@ -81,7 +113,7 @@ public class ResolvedorAccesoZetariano {
                         reportarErrorEn(linea, columna, "no se puede seguir accediendo despues de '" + nombreBase + "(...)'");
                         return Operando.error();
                     }
-                    return resolverLlamadaImpresion(sufijos.get(0), linea, columna);
+                    return resolverLlamadaImpresion(sufijos.get(0), linea, columna, nombreBase.equals("println"));
                 }
                 // No es variable/parametro: es una llamada a un metodo
                 // PROPIO sin 'this.' explicito (equivale a this.nombreBase(...)).
@@ -89,7 +121,7 @@ public class ResolvedorAccesoZetariano {
             } else {
                 // Tampoco es una llamada: puede ser un campo propio
                 // referenciado sin 'this.' explicito.
-                Simbolo campo = claseActual != null ? claseActual.buscarCampo(nombreBase) : null;
+                Simbolo campo = claseActual != null ? claseActual.buscarCampoHeredado(nombreBase, global) : null;
                 if (campo == null) {
                     errores.reportar(linea, columna, "variable, campo o metodo no declarado: '" + nombreBase + "'");
                     return Operando.error();
@@ -99,7 +131,7 @@ public class ResolvedorAccesoZetariano {
             }
         }
 
-        int i = 0;
+        int i = inicioSufijos;
         while (i < sufijos.size()) {
             ZetarianoParser.SufijoAccesoContext sufijo = sufijos.get(i);
             int tipoSufijo = tipoDeSufijo(sufijo);
@@ -119,6 +151,30 @@ public class ResolvedorAccesoZetariano {
                 i++;
             } else if (tipoSufijo == SUFIJO_CAMPO) {
                 String nombreMiembro = sufijo.IDENTIFICADOR().getText();
+                boolean sigueLlamada = i + 1 < sufijos.size() && tipoDeSufijo(sufijos.get(i + 1)) == SUFIJO_LLAMADA;
+                if (tipoActual.getCategoria() == Tipo.Categoria.ARREGLO && nombreMiembro.equals("length") && !sigueLlamada) {
+                    // arr.length (dimension 0) o arr[i].length (dimension 1, ...): se cuentan los indices ya aplicados
+                    int indicesAplicados = 0;
+                    int prof = 0;
+                    for (char ch : textoActual.toCharArray()) {
+                        if (ch == '[') {
+                            if (prof == 0) {
+                                indicesAplicados++;
+                            }
+                            prof++;
+                        } else if (ch == ']') {
+                            prof--;
+                        }
+                    }
+                    int corte = textoActual.indexOf('[');
+                    String baseArreglo = corte < 0 ? textoActual : textoActual.substring(0, corte);
+                    String temporal = cuartetas.nuevoTemporal();
+                    cuartetas.agregar("len", baseArreglo, String.valueOf(indicesAplicados), temporal);
+                    tipoActual = Tipo.ENTERO;
+                    textoActual = temporal;
+                    i++;
+                    continue;
+                }
                 if (tipoActual.getCategoria() != Tipo.Categoria.CLASE) {
                     reportarError(sufijo, "'" + textoActual + "' no es un objeto, no tiene miembro '" + nombreMiembro + "'");
                     return Operando.error();
@@ -131,7 +187,7 @@ public class ResolvedorAccesoZetariano {
                 boolean siguienteEsLlamada = i + 1 < sufijos.size() && tipoDeSufijo(sufijos.get(i + 1)) == SUFIJO_LLAMADA;
                 if (siguienteEsLlamada) {
                     Operando resultado = resolverLlamadaMetodo(clase, nombreMiembro, textoActual, sufijos.get(i + 1),
-                            sufijo.getStart().getLine(), sufijo.getStart().getCharPositionInLine());
+                            sufijo.getStart().getLine(), sufijo.getStart().getCharPositionInLine(), claseActual);
                     if (resultado.esError()) {
                         return resultado;
                     }
@@ -148,9 +204,15 @@ public class ResolvedorAccesoZetariano {
                     continue;
                 }
 
-                Simbolo campo = clase.buscarCampo(nombreMiembro);
+                Simbolo campo = clase.buscarCampoHeredado(nombreMiembro, global);
                 if (campo == null) {
                     reportarError(sufijo, "la clase '" + clase.getNombre() + "' no tiene un campo '" + nombreMiembro + "'");
+                    return Operando.error();
+                }
+                SimboloClase declarante = declaranteDeCampo(clase, nombreMiembro);
+                if (!accesoPermitido(campo, declarante, claseActual)) {
+                    reportarError(sufijo, "el campo '" + nombreMiembro + "' es " + campo.getVisibilidad().name().toLowerCase()
+                            + " en '" + declarante.getNombre() + "', no se puede acceder desde aqui");
                     return Operando.error();
                 }
                 tipoActual = campo.getTipo();
@@ -175,19 +237,20 @@ public class ResolvedorAccesoZetariano {
      * llamadas a 'print' seguidas van a salir en lineas separadas en vez de
      * concatenadas en una sola linea.
      */
-    private Operando resolverLlamadaImpresion(ZetarianoParser.SufijoAccesoContext sufijoLlamada, int linea, int columna) {
+    private Operando resolverLlamadaImpresion(ZetarianoParser.SufijoAccesoContext sufijoLlamada, int linea, int columna, boolean conSalto) {
         List<ZetarianoParser.ExpresionContext> argsCtx = sufijoLlamada.listaArgumentos() != null
                 ? sufijoLlamada.listaArgumentos().expresion() : Collections.<ZetarianoParser.ExpresionContext>emptyList();
         if (argsCtx.isEmpty()) {
             reportarErrorEn(linea, columna, "'println'/'print' necesita al menos un argumento");
             return Operando.error();
         }
-        for (ZetarianoParser.ExpresionContext a : argsCtx) {
-            Operando arg = visitor.visit(a);
+        for (int i = 0; i < argsCtx.size(); i++) {
+            Operando arg = visitor.visit(argsCtx.get(i));
             if (!arg.esValor()) {
                 return Operando.error();
             }
-            cuartetas.agregar("print", arg.getTexto(), null, null);
+            // println termina la linea en su ultimo argumento ("nl"); print no.
+            cuartetas.agregar("print", arg.getTexto(), null, conSalto && i == argsCtx.size() - 1 ? "nl" : null);
         }
         return Operando.sinValor();
     }
@@ -202,7 +265,7 @@ public class ResolvedorAccesoZetariano {
             errores.reportar(linea, columna, "no se puede llamar a '" + nombreMetodo + "' aqui");
             return Operando.error();
         }
-        Operando resultado = resolverLlamadaMetodo(claseActual, nombreMetodo, "this", sufijos.get(0), linea, columna);
+        Operando resultado = resolverLlamadaMetodo(claseActual, nombreMetodo, "this", sufijos.get(0), linea, columna, claseActual);
         if (resultado.esError() || sufijos.size() == 1) {
             return resultado;
         }
@@ -211,7 +274,13 @@ public class ResolvedorAccesoZetariano {
     }
 
     private Operando resolverLlamadaMetodo(SimboloClase clase, String nombreMetodo, String textoBase,
-                                           ZetarianoParser.SufijoAccesoContext sufijoLlamada, int linea, int columna) {
+                                           ZetarianoParser.SufijoAccesoContext sufijoLlamada, int linea, int columna, SimboloClase claseActual) {
+        return resolverLlamadaMetodo(clase, nombreMetodo, textoBase, sufijoLlamada, linea, columna, claseActual, false);
+    }
+
+    private Operando resolverLlamadaMetodo(SimboloClase clase, String nombreMetodo, String textoBase,
+                                           ZetarianoParser.SufijoAccesoContext sufijoLlamada, int linea, int columna, SimboloClase claseActual,
+                                           boolean esSuper) {
         List<ZetarianoParser.ExpresionContext> argsCtx = sufijoLlamada.listaArgumentos() != null
                 ? sufijoLlamada.listaArgumentos().expresion() : Collections.<ZetarianoParser.ExpresionContext>emptyList();
         List<Operando> args = new ArrayList<>();
@@ -226,9 +295,15 @@ public class ResolvedorAccesoZetariano {
         for (Operando a : args) {
             tipos.add(a.getTipo());
         }
-        SimboloInvocable metodo = buscarPorFirma(clase.buscarMetodos(nombreMetodo), tipos);
+        SimboloInvocable metodo = buscarPorFirma(clase.buscarMetodosHeredados(nombreMetodo, global), tipos);
         if (metodo == null) {
             errores.reportar(linea, columna, "'" + clase.getNombre() + "' no tiene un metodo '" + nombreMetodo + "' con esos argumentos");
+            return Operando.error();
+        }
+        SimboloClase declarante = declaranteDeMetodo(clase, nombreMetodo, tipos);
+        if (declarante != null && !accesoPermitido(metodo, declarante, claseActual)) {
+            errores.reportar(linea, columna, "el metodo '" + nombreMetodo + "' es " + metodo.getVisibilidad().name().toLowerCase()
+                    + " en '" + declarante.getNombre() + "', no se puede llamar desde aqui");
             return Operando.error();
         }
 
@@ -237,15 +312,165 @@ public class ResolvedorAccesoZetariano {
         }
         cuartetas.agregar("param", textoBase, null, null); // el objeto sobre el que se llama (el 'this' del metodo)
 
+        String destinoLlamada = (esSuper ? "super" : textoBase) + "." + nombreMetodo + "#" + com.company.semantico.Etiquetas.firma(metodo);
         if (metodo.getTipoRetorno().getCategoria() == Tipo.Categoria.VOID) {
-            cuartetas.agregar("call", textoBase + "." + nombreMetodo, String.valueOf(args.size()), null);
+            cuartetas.agregar("call", destinoLlamada, String.valueOf(args.size()), null);
             return Operando.sinValor();
         }
         String temporal = cuartetas.nuevoTemporal();
-        cuartetas.agregar("call", textoBase + "." + nombreMetodo, String.valueOf(args.size()), temporal);
+        cuartetas.agregar("call", destinoLlamada, String.valueOf(args.size()), temporal);
         return new Operando(metodo.getTipoRetorno(), temporal);
     }
 
+    /**
+     * 'super(args)' dentro de un constructor: resuelve el constructor del padre
+     * por firma, valida su visibilidad y emite  param args..., param this, call super.ctor n.
+     */
+    public boolean resolverLlamadaSuperConstructor(ZetarianoParser.ListaArgumentosContext listaArgs, SimboloClase claseActual,
+                                                   int linea, int columna) {
+        SimboloClase padre = claseActual.getSuperclase(global);
+        if (padre == null) {
+            errores.reportar(linea, columna, "'super(...)' solo se puede usar en una clase que hereda de otra ('extends')");
+            return false;
+        }
+        List<ZetarianoParser.ExpresionContext> argsCtx = listaArgs != null ? listaArgs.expresion()
+                : Collections.<ZetarianoParser.ExpresionContext>emptyList();
+        List<Operando> args = new ArrayList<>();
+        for (ZetarianoParser.ExpresionContext a : argsCtx) {
+            args.add(visitor.visit(a));
+        }
+        if (contieneError(args)) {
+            return false;
+        }
+        List<Tipo> tipos = new ArrayList<>();
+        for (Operando a : args) {
+            tipos.add(a.getTipo());
+        }
+        return emitirLlamadaConstructorPadre(padre, args, tipos, claseActual, linea, columna);
+    }
+
+    /**
+     * 'this(args)' como primera sentencia de un constructor: delega en otro constructor de la
+     * MISMA clase (resuelto por firma). Emite  param args..., param this, call this.<init>#firma n.
+     */
+    public boolean resolverLlamadaThisConstructor(ZetarianoParser.ListaArgumentosContext listaArgs, SimboloClase claseActual,
+                                                  SimboloInvocable constructorActual, int linea, int columna) {
+        List<ZetarianoParser.ExpresionContext> argsCtx = listaArgs != null ? listaArgs.expresion()
+                : Collections.<ZetarianoParser.ExpresionContext>emptyList();
+        List<Operando> args = new ArrayList<>();
+        for (ZetarianoParser.ExpresionContext a : argsCtx) {
+            args.add(visitor.visit(a));
+        }
+        if (contieneError(args)) {
+            return false;
+        }
+        List<Tipo> tipos = new ArrayList<>();
+        for (Operando a : args) {
+            tipos.add(a.getTipo());
+        }
+        SimboloInvocable ctor = buscarPorFirma(claseActual.getConstructores(), tipos);
+        if (ctor == null) {
+            errores.reportar(linea, columna, "'" + claseActual.getNombre() + "' no tiene un constructor que reciba " + tipos.size()
+                    + " argumento(s) de esos tipos (usa 'this(...)' con los argumentos correctos)");
+            return false;
+        }
+        if (ctor == constructorActual) {
+            errores.reportar(linea, columna, "un constructor no puede llamarse a si mismo con 'this(...)'");
+            return false;
+        }
+        for (Operando a : args) {
+            cuartetas.agregar("param", a.getTexto(), null, null);
+        }
+        cuartetas.agregar("param", "this", null, null);
+        cuartetas.agregar("call", "this.<init>#" + com.company.semantico.Etiquetas.firma(ctor), String.valueOf(args.size()), null);
+        return true;
+    }
+
+    /** 'super()' implicito: el padre debe tener un constructor sin parametros (o el de por defecto). */
+    public boolean resolverSuperImplicito(SimboloClase claseActual, int linea, int columna) {
+        SimboloClase padre = claseActual.getSuperclase(global);
+        if (padre == null) {
+            return true;
+        }
+        if (buscarPorFirma(padre.getConstructores(), new ArrayList<>()) == null) {
+            return true; // el padre no tiene constructor sin parametros: no hay 'super()' implicito que llamar
+        }
+        return emitirLlamadaConstructorPadre(padre, new ArrayList<>(), new ArrayList<>(), claseActual, linea, columna);
+    }
+
+    private boolean emitirLlamadaConstructorPadre(SimboloClase padre, List<Operando> args, List<Tipo> tipos,
+                                                  SimboloClase claseActual, int linea, int columna) {
+        SimboloInvocable ctor = buscarPorFirma(padre.getConstructores(), tipos);
+        if (ctor == null) {
+            errores.reportar(linea, columna, "'" + padre.getNombre() + "' no tiene un constructor que reciba " + tipos.size()
+                    + " argumento(s) de esos tipos (usa 'super(...)' con los argumentos correctos)");
+            return false;
+        }
+        if (!accesoPermitido(ctor, padre, claseActual)) {
+            errores.reportar(linea, columna, "el constructor de '" + padre.getNombre() + "' es "
+                    + ctor.getVisibilidad().name().toLowerCase() + ", no se puede llamar desde '" + claseActual.getNombre() + "'");
+            return false;
+        }
+        for (Operando a : args) {
+            cuartetas.agregar("param", a.getTexto(), null, null);
+        }
+        cuartetas.agregar("param", "this", null, null);
+        cuartetas.agregar("call", "super.<init>#" + com.company.semantico.Etiquetas.firma(ctor), String.valueOf(args.size()), null);
+        return true;
+    }
+
+    /** La clase que realmente declara el campo (la propia o la primera superclase que lo tenga). */
+    private SimboloClase declaranteDeCampo(SimboloClase clase, String nombre) {
+        SimboloClase actual = clase;
+        while (actual != null) {
+            if (actual.buscarCampo(nombre) != null) {
+                return actual;
+            }
+            actual = actual.getSuperclase(global);
+        }
+        return null;
+    }
+
+    /** La clase que realmente declara el metodo con esa firma. */
+    private SimboloClase declaranteDeMetodo(SimboloClase clase, String nombre, List<Tipo> tipos) {
+        SimboloClase actual = clase;
+        while (actual != null) {
+            for (SimboloInvocable m : actual.buscarMetodos(nombre)) {
+                if (m.mismaFirma(tipos)) {
+                    return actual;
+                }
+            }
+            actual = actual.getSuperclase(global);
+        }
+        return null;
+    }
+
+    /** PRIVATE: solo la clase declarante; PROTECTED: declarante y subclases; PUBLIC/DEFAULT: siempre. */
+    private boolean accesoPermitido(Simbolo miembro, SimboloClase declarante, SimboloClase claseActual) {
+        if (declarante == null) {
+            return true;
+        }
+        Visibilidad v = miembro.getVisibilidad();
+        if (claseActual == null) {
+            return v == Visibilidad.PUBLIC;
+        }
+        boolean mismaClase = claseActual.getNombre().equals(declarante.getNombre());
+        if (v == Visibilidad.PRIVATE) {
+            return mismaClase;
+        }
+        boolean mismoPaquete = claseActual.getPaquete().equals(declarante.getPaquete());
+        if (v == Visibilidad.PROTECTED) {
+            // mismo paquete, o subclase (aunque este en otro paquete)
+            return mismoPaquete || claseActual.esSubclaseDeOIgual(declarante.getNombre(), global);
+        }
+        if (v == Visibilidad.DEFAULT) {
+            // sin modificador: solo dentro del mismo paquete
+            return mismoPaquete;
+        }
+        return true;
+    }
+
+    // True si algun operando ya es error.
     private boolean contieneError(List<Operando> operandos) {
         for (Operando o : operandos) {
             if (o.esError()) {
@@ -255,19 +480,27 @@ public class ResolvedorAccesoZetariano {
         return false;
     }
 
+    // Elige el metodo/constructor segun tipos (sobrecarga).
     private SimboloInvocable buscarPorFirma(List<SimboloInvocable> candidatos, List<Tipo> tipos) {
         for (SimboloInvocable c : candidatos) {
             if (c.mismaFirma(tipos)) {
                 return c;
             }
         }
+        for (SimboloInvocable c : candidatos) {
+            if (c.aceptaArgumentos(tipos, global)) {
+                return c;
+            }
+        }
         return null;
     }
 
+    // Registra un error semantico.
     private void reportarError(org.antlr.v4.runtime.ParserRuleContext ctx, String mensaje) {
         errores.reportar(ctx.getStart().getLine(), ctx.getStart().getCharPositionInLine(), mensaje);
     }
 
+    // Registra un error en linea/columna.
     private void reportarErrorEn(int linea, int columna, String mensaje) {
         errores.reportar(linea, columna, mensaje);
     }

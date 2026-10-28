@@ -12,8 +12,12 @@ grammar Zetariano;
 
 // -------------------- PARSER --------------------
 
+// 'extends' es OPCIONAL: una clase sin superclase explicita (la gran
+// mayoria de archivos del Proyecto 1) sigue siendo valida. La clase
+// padre se busca por nombre en el analizador semantico (Pasada 1 de
+// RegistradorFirmasZetariano), no aqui.
 programa
-    : 'public' 'class' IDENTIFICADOR '{' miembro* '}' EOF
+    : 'public' 'class' IDENTIFICADOR ('extends' IDENTIFICADOR)? '{' miembro* '}' EOF
     ;
 
 miembro
@@ -23,34 +27,54 @@ miembro
     ;
 
 // El spec original mostraba campos SIN modificador (siempre publicos,
-// "el encapsulamiento se vera en la Parte 2"), pero un proyecto de
-// referencia real usa 'private' en los campos, asi que el modificador
-// es OPCIONAL: acepta ambos estilos. Que un campo empiece con
-// 'public'/'private' no choca con constructor/metodo (que tambien
-// empiezan con 'public'): ANTLR distingue mirando mas adelante si
+// "el encapsulamiento se vera en la Parte 2"); ahora la Parte 2 agrega
+// encapsulamiento real (public/private/protected/default), asi que el
+// modificador sigue siendo OPCIONAL (su ausencia = 'default'/
+// package-private) pero ya admite las 4 variantes. Que un campo empiece
+// con un modificador no choca con constructor/metodo (que tambien
+// pueden empezar con uno): ANTLR distingue mirando mas adelante si
 // despues del nombre viene '(' (constructor/metodo) o ';'/'=' (campo).
 declaracionCampo
     : modificadorVisibilidad? tipo IDENTIFICADOR ('=' inicializador)? ';'
     ;
 
+// 'default' (sin modificador) se expresa con modificadorVisibilidad
+// ausente en cada sitio donde se usa esta regla - no hay token propio
+// para "default" porque no hay nada que escribir en el codigo fuente
+// para pedirlo (a diferencia de 'public'/'private'/'protected', que SI
+// son palabras que el programador escribe).
 modificadorVisibilidad
     : 'public'
     | 'private'
+    | 'protected'
     ;
 
-// Un constructor se reconoce porque, a diferencia de un metodo, no
-// hay ningun tipo de retorno entre 'public' y el nombre: el nombre
-// del constructor debe coincidir con el de la clase (eso tambien se
-// valida en el analizador semantico, no aqui). Puede haber varios
-// (sobrecarga de constructor).
+// Un constructor se reconoce porque, a diferencia de un metodo, no hay
+// ningun tipo de retorno entre el modificador y el nombre: el nombre
+// del constructor debe coincidir con el de la clase (eso se valida en
+// el analizador semantico, no aqui). Puede haber varios (sobrecarga).
 constructor
-    : 'public' IDENTIFICADOR '(' listaParametros? ')' bloque
+    : modificadorVisibilidad? IDENTIFICADOR '(' listaParametros? ')' bloque
     ;
 
-// Metodos: publicos, con tipo de retorno explicito ('void' si no
-// retornan nada). Tambien se pueden sobrecargar.
+// Metodos: con tipo de retorno explicito ('void' si no retornan nada),
+// modificador de visibilidad opcional, y '@Override' opcional ANTES del
+// modificador (orden fijo, igual que en Java: anotacion, despues
+// modificador). '@Override' es obligatorio para marcar una
+// sobreescritura real de un metodo heredado (lo valida el analizador
+// semantico: si se marca pero el metodo no sobreescribe nada de la
+// superclase, o si se sobreescribe un metodo sin marcarlo, es error).
 metodo
-    : 'public' tipoRetorno IDENTIFICADOR '(' listaParametros? ')' bloque
+    : anotacion? modificadorVisibilidad? tipoRetorno IDENTIFICADOR '(' listaParametros? ')' bloque
+    ;
+
+// Generica a proposito ('@' IDENTIFICADOR, no '@' 'Override' literal):
+// el proyecto solo exige soportar '@Override', pero as escribirla asi
+// el analizador semantico puede dar un mensaje de error claro ("solo se
+// reconoce @Override") en vez de un error de sintaxis generico si
+// alguien escribe otra anotacion por error.
+anotacion
+    : '@' IDENTIFICADOR
     ;
 
 tipoRetorno
@@ -132,7 +156,7 @@ asignacion
 // El spec solo muestra +=, -=, *= (tabla "De asignación"); no hay
 // ejemplo de /= ni %=, asi que se dejan fuera por ahora.
 opAsignacion
-    : '=' | '+=' | '-=' | '*='
+    : '=' | '+=' | '-=' | '*=' | '/=' | '%='
     ;
 
 incrementoDecremento
@@ -147,7 +171,7 @@ incrementoDecremento
 // (this.campo = ...), asi que se agrega como punto de partida valido,
 // igual que un IDENTIFICADOR.
 acceso
-    : (IDENTIFICADOR | 'this') sufijoAcceso*
+    : (IDENTIFICADOR | 'this' | 'super') sufijoAcceso*
     ;
 
 sufijoAcceso
@@ -212,7 +236,9 @@ cicloHacer
 // la alternativa listada primero liga mas fuerte), calcado del orden
 // real de Java ya que el spec sigue ese estilo explicitamente.
 expresion
-    : ('!'|'-') expresion                                          # expUnaria
+    : acceso op=('++'|'--')                                        # expPostIncremento
+    | op=('++'|'--') acceso                                        # expPreIncremento
+    | ('!'|'-') expresion                                          # expUnaria
     | expresion op=('*'|'/'|'%') expresion                         # expMultiplicativa
     | expresion op=('+'|'-') expresion                              # expAditiva
     | expresion op=('<'|'>'|'<='|'>=') expresion                     # expRelacional
@@ -260,6 +286,8 @@ TRUE        : 'true';
 FALSE       : 'false';
 NULL        : 'null';
 THIS        : 'this';
+EXTENDS     : 'extends';
+SUPER       : 'super';
 
 INT_T       : 'int';
 DOUBLE_T    : 'double';
@@ -279,6 +307,8 @@ OP_MAYOR_IGUAL  : '>=';
 OP_MAS_ASIGNA   : '+=';
 OP_MENOS_ASIGNA : '-=';
 OP_MULT_ASIGNA  : '*=';
+OP_DIV_ASIGNA   : '/=';
+OP_MOD_ASIGNA   : '%=';
 OP_MENOR        : '<';
 OP_MAYOR        : '>';
 OP_NOT          : '!';
@@ -299,6 +329,7 @@ LLAVE_ABRE      : '{';
 LLAVE_CIERRA    : '}';
 CORCHETE_ABRE   : '[';
 CORCHETE_CIERRA : ']';
+ARROBA          : '@';
 
 IDENTIFICADOR
     : [a-zA-Z_][a-zA-Z0-9_]*
