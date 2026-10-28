@@ -53,6 +53,8 @@ OP_IGUAL        : '==';
 OP_DISTINTO     : '!=';
 OP_INC          : '++';
 OP_DEC          : '--';
+OP_MENOR_IGUAL  : '<=';
+OP_MAYOR_IGUAL  : '>=';
 OP_MENOR        : '<';
 OP_MAYOR        : '>';
 OP_NOT          : '!';

@@ -203,13 +203,12 @@ cicloHacer
 // ---- Expresiones ----
 // Orden de mayor a menor precedencia (recursion izquierda de ANTLR4:
 // la alternativa listada primero liga mas fuerte). Solo se incluyen
-// los operadores que el spec de Y? lista explicitamente: no hay <=,
-// >=, %, ni asignaciones compuestas para este lenguaje en particular.
+// los operadores que el spec de Y? lista explicitamente: <= y >= se aceptan ademas (los usan los ejemplos). No hay %, ni asignaciones compuestas.
 expresion
     : ('!'|'-') expresion                          # expUnaria
     | expresion op=('*'|'/') expresion              # expMultiplicativa
     | expresion op=('+'|'-') expresion               # expAditiva
-    | expresion op=('<'|'>') expresion                # expRelacional
+    | expresion op=('<'|'>'|'<='|'>=') expresion                # expRelacional
     | expresion op=('=='|'!=') expresion               # expIgualdad
     | expresion '&&' expresion                          # expAnd
     | expresion '||' expresion                           # expOr

@@ -102,6 +102,11 @@ public abstract class YLexerBase extends Lexer {
                     // sigue leyendo como si no hubiera pasado nada.
                     return obtenerSiguienteToken();
                 }
+                if (ultimoTipoTokenDevuelto == null) {
+                    // Saltos de linea / comentarios ANTES del primer token real (ej. un
+                    // comentario en la primera linea) no separan nada: se ignoran.
+                    return obtenerSiguienteToken();
+                }
                 return procesarNewline(siguiente);
 
             case Token.EOF:

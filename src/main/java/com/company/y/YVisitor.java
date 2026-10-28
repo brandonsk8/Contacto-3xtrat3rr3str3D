@@ -132,6 +132,25 @@ public class YVisitor extends YParserBaseVisitor<Operando> {
             return null;
         }
 
+        // Arreglo de N dimensiones: se evalua cada tamano y se reserva con una
+        // sola cuarteta 'new_array tipo "t1,t2,..." nombre' (igual que Pig Latin y Zetariano).
+        List<String> tamanios = new ArrayList<>();
+        if (dims > 0) {
+            boolean tamaniosValidos = true;
+            for (YParser.ExpresionContext e : ctx.expresion()) {
+                Operando tam = visit(e);
+                if (!tam.esValor() || tam.getTipo().getCategoria() != Tipo.Categoria.ENTERO) {
+                    reportarError(e, "el tamano de un arreglo debe ser entero");
+                    tamaniosValidos = false;
+                } else {
+                    tamanios.add(tam.getTexto());
+                }
+            }
+            if (tamaniosValidos) {
+                cuartetas.agregar("new_array", tipoBase.toString(), String.join(",", tamanios), nombre);
+            }
+        }
+
         if (ctx.inicializador() != null) {
             YParser.InicializadorContext init = ctx.inicializador();
             if (init.expresion() != null) {
@@ -165,11 +184,37 @@ public class YVisitor extends YParserBaseVisitor<Operando> {
                     if (!v.esValor()) {
                         continue;
                     }
-                    if (dims != 1 || !tipoBase.esCompatibleCon(v.getTipo())) {
+                    if (dims < 1 || !tipoBase.esCompatibleCon(v.getTipo())) {
                         reportarError(valores.get(i), "el elemento " + i + " de '" + nombre + "' deberia ser " + tipoBase + ", se recibio " + v.getTipo());
                         continue;
                     }
-                    cuartetas.agregar("=", v.getTexto(), null, nombre + "[" + i + "]");
+                    // Lista plana: se reparte en orden de filas (a[0][0], a[0][1], ...) usando los tamanos literales
+                    StringBuilder acceso = new StringBuilder(nombre);
+                    int resto = i;
+                    boolean indicesCalculables = true;
+                    int[] idxDim = new int[dims];
+                    for (int k = dims - 1; k >= 0; k--) {
+                        if (k == 0) {
+                            idxDim[0] = resto;
+                            continue;
+                        }
+                        String t = k < tamanios.size() ? tamanios.get(k) : "";
+                        if (!t.matches("[0-9]+") || Integer.parseInt(t) == 0) {
+                            indicesCalculables = false;
+                            break;
+                        }
+                        int tam = Integer.parseInt(t);
+                        idxDim[k] = resto % tam;
+                        resto = resto / tam;
+                    }
+                    if (!indicesCalculables) {
+                        reportarError(valores.get(i), "para inicializar '" + nombre + "' con una lista, sus dimensiones deben ser enteros literales");
+                        continue;
+                    }
+                    for (int k = 0; k < dims; k++) {
+                        acceso.append("[").append(idxDim[k]).append("]");
+                    }
+                    cuartetas.agregar("=", v.getTexto(), null, acceso.toString());
                 }
             }
         }
@@ -216,12 +261,18 @@ public class YVisitor extends YParserBaseVisitor<Operando> {
     }
 
     private Operando manejarContinuar(YParser.SentenciaSimpleContext ctx) {
-        if (pilaCiclos.isEmpty()) {
+        // 'continue' dentro de un switch/elegir afecta al ciclo que lo rodea (como en Java/C)
+        String destinoContinue = null;
+        for (String[] entrada : pilaCiclos) { // del mas interno al mas externo
+            if (entrada[0] != null) {
+                destinoContinue = entrada[0];
+                break;
+            }
+        }
+        if (destinoContinue == null) {
             reportarError(ctx, "'continuar' fuera de un ciclo");
-        } else if (pilaCiclos.peek()[0] == null) {
-            reportarError(ctx, "'continuar' no es valido dentro de un 'elegir'");
         } else {
-            cuartetas.agregar("goto", null, null, pilaCiclos.peek()[0]);
+            cuartetas.agregar("goto", null, null, destinoContinue);
         }
         return null;
     }
@@ -544,7 +595,15 @@ public class YVisitor extends YParserBaseVisitor<Operando> {
     }
 
     private Operando operacionLogica(ParserRuleContext ctx, YParser.ExpresionContext ei, YParser.ExpresionContext ed, String op) {
+        // Cortocircuito (como Java/C): el lado derecho solo se evalua si hace falta,
+        // asi 'x != null && x.activo()' no llama a un metodo sobre null.
         Operando izq = visit(ei);
+        String temporal = cuartetas.nuevoTemporal();
+        String etiquetaFin = cuartetas.nuevaEtiqueta();
+        if (izq.esValor()) {
+            cuartetas.agregar("=", izq.getTexto(), null, temporal);
+            cuartetas.agregar("&&".equals(op) ? "if_false" : "if_true", temporal, null, etiquetaFin);
+        }
         Operando der = visit(ed);
         if (!izq.esValor() || !der.esValor()) {
             return Operando.error();
@@ -553,8 +612,8 @@ public class YVisitor extends YParserBaseVisitor<Operando> {
             reportarError(ctx, "'" + op + "' solo aplica entre valores booleanos, no " + izq.getTipo() + " y " + der.getTipo());
             return Operando.error();
         }
-        String temporal = cuartetas.nuevoTemporal();
-        cuartetas.agregar(op, izq.getTexto(), der.getTexto(), temporal);
+        cuartetas.agregar("=", der.getTexto(), null, temporal);
+        cuartetas.agregar("label", null, null, etiquetaFin);
         return new Operando(Tipo.BOOLEANO, temporal);
     }
 
@@ -686,9 +745,11 @@ public class YVisitor extends YParserBaseVisitor<Operando> {
             if (args.isEmpty()) {
                 errores.reportar(linea, columna, "'imprimir' necesita al menos un argumento");
             }
-            for (Operando arg : args) {
+            for (int i = 0; i < args.size(); i++) {
+                Operando arg = args.get(i);
                 if (arg.esValor()) {
-                    cuartetas.agregar("print", arg.getTexto(), null, null);
+                    // los argumentos de un mismo imprimir(...) van en una linea: solo el ultimo lleva el salto ("nl")
+                    cuartetas.agregar("print", arg.getTexto(), null, i == args.size() - 1 ? "nl" : null);
                 }
             }
             return Operando.sinValor();
