@@ -116,9 +116,30 @@ public final class Tipo {
             return true;
         }
         if (otro.categoria == Categoria.NULO) {
-            return this.categoria == Categoria.ESTRUCTURA || this.categoria == Categoria.CLASE || this.categoria == Categoria.ARREGLO;
+            return this.categoria == Categoria.ESTRUCTURA || this.categoria == Categoria.CLASE || this.categoria == Categoria.ARREGLO
+                    || this.categoria == Categoria.CADENA;
         }
         return this.categoria == Categoria.DECIMAL && otro.categoria == Categoria.ENTERO;
+    }
+
+    /**
+     * Como esCompatibleCon, pero acepta ademas una SUBCLASE donde se espera su
+     * superclase (polimorfismo, Parte 2). Necesita 'global' para subir por la
+     * cadena de 'extends'.
+     */
+    public boolean esCompatibleConPolimorfismo(Tipo otro, TablaSimbolosGlobal global) {
+        if (esCompatibleCon(otro)) {
+            return true;
+        }
+        if (this.categoria == Categoria.CLASE && otro != null && otro.categoria == Categoria.CLASE && global != null) {
+            SimboloClase claseReal = global.buscarClase(otro.nombreDefinido);
+            return claseReal != null && claseReal.esSubclaseDeOIgual(this.nombreDefinido, global);
+        }
+        if (this.categoria == Categoria.ARREGLO && otro != null && otro.categoria == Categoria.ARREGLO
+                && this.dimensiones == otro.dimensiones && this.tipoBase != null && otro.tipoBase != null) {
+            return this.tipoBase.esCompatibleConPolimorfismo(otro.tipoBase, global);
+        }
+        return false;
     }
 
     @Override

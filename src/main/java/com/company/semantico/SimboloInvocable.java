@@ -22,6 +22,9 @@ public class SimboloInvocable extends Simbolo {
     private final Tipo tipoRetorno;
     private TablaSimbolos ambitoLocal;
 
+    /** Solo METODO (Parte 2): true si llevaba '@Override'. */
+    private boolean marcadoOverride;
+
     public SimboloInvocable(String nombre, CategoriaSimbolo categoria, List<Simbolo> parametros,
                              Tipo tipoRetorno, int linea, int columna) {
         super(nombre, tipoRetorno, categoria, linea, columna);
@@ -45,11 +48,38 @@ public class SimboloInvocable extends Simbolo {
         this.ambitoLocal = ambitoLocal;
     }
 
+    public boolean isMarcadoOverride() {
+        return marcadoOverride;
+    }
+
+    public void setMarcadoOverride(boolean marcadoOverride) {
+        this.marcadoOverride = marcadoOverride;
+    }
+
     /**
      * Compara solo por cantidad y tipo de parametros (sirve para
      * detectar sobrecargas duplicadas en Zetariano al agregar un metodo
      * o constructor con la misma firma que uno ya existente).
      */
+    /**
+     * Para RESOLVER una llamada (no para detectar duplicados): cada argumento
+     * debe poder asignarse al parametro correspondiente, lo que incluye pasar
+     * una subclase donde se espera la superclase (polimorfismo) y un entero
+     * donde se espera un decimal.
+     */
+    public boolean aceptaArgumentos(List<Tipo> tiposArgumentos, TablaSimbolosGlobal global) {
+        if (parametros.size() != tiposArgumentos.size()) {
+            return false;
+        }
+        for (int i = 0; i < parametros.size(); i++) {
+            Tipo arg = tiposArgumentos.get(i);
+            if (arg == null || !parametros.get(i).getTipo().esCompatibleConPolimorfismo(arg, global)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public boolean mismaFirma(List<Tipo> tiposArgumentos) {
         if (parametros.size() != tiposArgumentos.size()) {
             return false;

@@ -29,6 +29,9 @@ public class Simbolo {
      */
     private String tamanioArreglo;
 
+    /** Visibilidad (Parte 2). PUBLIC por defecto para no afectar Y?/Pig Latin ni la Parte 1. */
+    private Visibilidad visibilidad = Visibilidad.PUBLIC;
+
     public Simbolo(String nombre, Tipo tipo, CategoriaSimbolo categoria, int linea, int columna) {
         this.nombre = nombre;
         this.tipo = tipo;
@@ -43,6 +46,14 @@ public class Simbolo {
 
     public void setTamanioArreglo(String tamanioArreglo) {
         this.tamanioArreglo = tamanioArreglo;
+    }
+
+    public Visibilidad getVisibilidad() {
+        return visibilidad;
+    }
+
+    public void setVisibilidad(Visibilidad visibilidad) {
+        this.visibilidad = visibilidad != null ? visibilidad : Visibilidad.PUBLIC;
     }
 
     public String getNombre() {
