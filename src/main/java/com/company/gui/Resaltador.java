@@ -36,17 +36,24 @@ import java.util.regex.Pattern;
  */
 public class Resaltador {
 
-    private static final Color COLOR_PALABRA_CLAVE = new Color(0, 0, 200);
-    private static final Color COLOR_CADENA = new Color(0, 128, 0);
-    private static final Color COLOR_COMENTARIO = new Color(128, 128, 128);
-    private static final Color COLOR_NUMERO = new Color(153, 0, 153);
-    private static final Color COLOR_NORMAL = Color.BLACK;
+    private static SimpleAttributeSet ESTILO_PALABRA_CLAVE;
+    private static SimpleAttributeSet ESTILO_CADENA;
+    private static SimpleAttributeSet ESTILO_COMENTARIO;
+    private static SimpleAttributeSet ESTILO_NUMERO;
+    private static SimpleAttributeSet ESTILO_NORMAL;
 
-    private static final SimpleAttributeSet ESTILO_PALABRA_CLAVE = estilo(COLOR_PALABRA_CLAVE, true);
-    private static final SimpleAttributeSet ESTILO_CADENA = estilo(COLOR_CADENA, false);
-    private static final SimpleAttributeSet ESTILO_COMENTARIO = estiloItalica(COLOR_COMENTARIO);
-    private static final SimpleAttributeSet ESTILO_NUMERO = estilo(COLOR_NUMERO, false);
-    private static final SimpleAttributeSet ESTILO_NORMAL = estilo(COLOR_NORMAL, false);
+    static {
+        actualizarColores();
+    }
+
+    /** Reconstruye los estilos segun la paleta actual de Tema (claro/oscuro). */
+    static void actualizarColores() {
+        ESTILO_PALABRA_CLAVE = estilo(Tema.kw, true);
+        ESTILO_CADENA = estilo(Tema.cadena, false);
+        ESTILO_COMENTARIO = estiloItalica(Tema.comentario);
+        ESTILO_NUMERO = estilo(Tema.numero, false);
+        ESTILO_NORMAL = estilo(Tema.texto, false);
+    }
 
     // Palabras reservadas de cada lenguaje - ver los .g4 en src/main/antlr4
     // (YLexer.g4, Zetariano.g4, PigLatin.g4) para la lista original.

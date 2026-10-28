@@ -1,6 +1,7 @@
 package com.company.gui;
 
-import com.company.backend.GeneradorC;
+import com.company.backend.GeneradorCEtiquetas;
+import com.company.backend.GeneradorRiscV;
 import com.company.ir.TablaCuartetas;
 import com.company.pig.ArchivoImportado;
 import com.company.pig.PigLatinAnalizador;
@@ -131,7 +132,9 @@ public class EjecutorPipeline {
 
         String encabezado = "Imports resueltos: " + importados.size() + "\n";
         Resultado resultado = armarReporte("Pig Latin", nombrePrograma, colector.errores, errores, global, cuartetas);
-        return new Resultado(encabezado + resultado.reporte, resultado.codigoC, global);
+        Resultado conImports = new Resultado(encabezado + resultado.reporte, resultado.codigoC, global, resultado.codigoAsm);
+        conImports.codigoC3d = resultado.codigoC3d;
+        return conImports;
     }
 
     private Resultado armarReporte(String lenguaje, String nombrePrograma, List<String> erroresSintaxis, GestorErrores errores,
@@ -140,11 +143,16 @@ public class EjecutorPipeline {
         r.append("=== ").append(lenguaje).append(" - ").append(nombrePrograma).append(" ===\n");
 
         if (!erroresSintaxis.isEmpty()) {
-            r.append("ADVERTENCIA: ").append(erroresSintaxis.size()).append(" error(es) de sintaxis:\n");
+            r.append("ERROR: ").append(erroresSintaxis.size()).append(" error(es) de sintaxis:\n");
             for (String e : erroresSintaxis) {
                 r.append("  - ").append(e).append("\n");
             }
             r.append("\n");
+            // Con errores lexicos/sintacticos no se genera codigo ni se ejecuta.
+            if (!errores.tieneErrores()) {
+                r.append("No se genera codigo mientras haya errores de sintaxis.\n");
+                return new Resultado(r.toString(), null, global);
+            }
         }
 
         if (errores.tieneErrores()) {
@@ -159,11 +167,11 @@ public class EjecutorPipeline {
         r.append("Sin errores semanticos.\n");
         r.append("Cuartetas generadas: ").append(cuartetas.getCuartetas().size()).append("\n\n");
 
-        GeneradorC generador = new GeneradorC(global);
+        GeneradorCEtiquetas generador = new GeneradorCEtiquetas(global);
         String codigoC = generador.generar(nombrePrograma, cuartetas);
 
-        r.append("--- Codigo C generado ---\n");
-        r.append(codigoC).append("\n");
+        r.append("Codigo C (solo etiquetas y goto) y RISC-V generados: mira las pestanas 'C generado' y 'RISC-V generado'.\n");
+        r.append("Para correrlo dentro de la aplicacion usa \"Compilar y ejecutar\".\n\n");
 
         if (!generador.getNotas().isEmpty()) {
             r.append("--- Notas del generador (partes omitidas del .c y por que) ---\n");
@@ -171,7 +179,18 @@ public class EjecutorPipeline {
                 r.append("  - ").append(nota).append("\n");
             }
         }
-        return new Resultado(r.toString(), codigoC, global);
+
+        GeneradorRiscV generadorRv = new GeneradorRiscV(global);
+        String codigoAsm = generadorRv.generar(nombrePrograma, cuartetas);
+        if (!generadorRv.getNotas().isEmpty()) {
+            r.append("--- Notas del generador RISC-V (partes omitidas del .asm y por que) ---\n");
+            for (String nota : generadorRv.getNotas()) {
+                r.append("  - ").append(nota).append("\n");
+            }
+        }
+        Resultado res = new Resultado(r.toString(), codigoC, global, codigoAsm);
+        res.codigoC3d = com.company.ir.FormateadorC3D.formatear(nombrePrograma, cuartetas.getCuartetas());
+        return res;
     }
 
     /**
@@ -184,8 +203,16 @@ public class EjecutorPipeline {
         public final String reporte;
         public final String codigoC;
         public final TablaSimbolosGlobal tablaSimbolos;
+        public final String codigoAsm;
+        /** Codigo de tres direcciones (cuartetas) en texto legible; null si hubo errores. */
+        public String codigoC3d;
 
         Resultado(String reporte, String codigoC, TablaSimbolosGlobal tablaSimbolos) {
+            this(reporte, codigoC, tablaSimbolos, null);
+        }
+
+        Resultado(String reporte, String codigoC, TablaSimbolosGlobal tablaSimbolos, String codigoAsm) {
+            this.codigoAsm = codigoAsm;
             this.reporte = reporte;
             this.codigoC = codigoC;
             this.tablaSimbolos = tablaSimbolos;
