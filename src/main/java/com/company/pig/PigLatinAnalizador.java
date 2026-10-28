@@ -94,21 +94,49 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
 
     @Override
     public Operando visitDeclaracionSimple(PigLatinParser.DeclaracionSimpleContext ctx) {
-        return declararVariableSimple(ctx.IDENTIFICADOR().getText(), ctx.getStart().getLine(), ctx.getStart().getCharPositionInLine(),
-                ctx.inicializador(), ctx);
+        // IDENTIFICADOR trae 1 elemento (nombre) o 2 (nombre + tipo anotado, Parte 2).
+        String nombreTipoAnotado = ctx.IDENTIFICADOR().size() > 1 ? ctx.IDENTIFICADOR(1).getText() : null;
+        return declararVariableSimple(ctx.IDENTIFICADOR(0).getText(), ctx.getStart().getLine(), ctx.getStart().getCharPositionInLine(),
+                ctx.inicializador(), nombreTipoAnotado, ctx);
+    }
+
+    /** 'esto obj : Tipo ;' - objeto declarado sin inicializar: queda en null, con el tipo dado. */
+    @Override
+    public Operando visitDeclaracionObjetoSinInicializar(PigLatinParser.DeclaracionObjetoSinInicializarContext ctx) {
+        return declararVariableSimple(ctx.IDENTIFICADOR(0).getText(), ctx.getStart().getLine(), ctx.getStart().getCharPositionInLine(),
+                null, ctx.IDENTIFICADOR(1).getText(), ctx);
     }
 
     /** Mismo caso que visitDeclaracionSimple, pero para 'esto i : numerus 0' dentro del forInit de un 'per' (sin ';' propio - ver el .g4). */
     @Override
     public Operando visitForInitDeclaracionSimple(PigLatinParser.ForInitDeclaracionSimpleContext ctx) {
         return declararVariableSimple(ctx.IDENTIFICADOR().getText(), ctx.getStart().getLine(), ctx.getStart().getCharPositionInLine(),
-                ctx.inicializador(), ctx);
+                ctx.inicializador(), null, ctx);
     }
 
     private Operando declararVariableSimple(String nombre, int linea, int columna,
-                                            PigLatinParser.InicializadorContext inicializadorCtx, ParserRuleContext ctxError) {
-        Operando resultado = visit(inicializadorCtx);
-        Tipo tipo = resultado.getTipo() != null ? resultado.getTipo() : Tipo.ERROR;
+                                             PigLatinParser.InicializadorContext inicializadorCtx, String nombreTipoAnotado,
+                                             ParserRuleContext ctxError) {
+        Operando resultado = inicializadorCtx != null ? visit(inicializadorCtx) : new Operando(Tipo.NULO, "null");
+        Tipo tipoInferido = resultado.getTipo() != null ? resultado.getTipo() : Tipo.ERROR;
+
+        // Con tipo anotado (objetos / 'null', Parte 2) el tipo de la variable es el
+        // ANOTADO, validando compatibilidad (acepta null y subclases).
+        Tipo tipo = tipoInferido;
+        if (nombreTipoAnotado == null && tipoInferido.getCategoria() == Tipo.Categoria.NULO) {
+            reportarError(ctxError, "'" + nombre + " : null' necesita el tipo explicito (ej. 'esto " + nombre + " : null : Persona ;')");
+            tipo = Tipo.ERROR;
+        } else if (nombreTipoAnotado != null) {
+            Tipo tipoAnotado = global.resolverTipo(nombreTipoAnotado);
+            if (tipoAnotado == null) {
+                reportarError(ctxError, "'" + nombreTipoAnotado + "' no es un tipo conocido (revisa los 'import')");
+                tipoAnotado = Tipo.ERROR;
+            } else if (tipoInferido.getCategoria() != Tipo.Categoria.ERROR
+                    && !tipoAnotado.esCompatibleConPolimorfismo(tipoInferido, global)) {
+                reportarError(ctxError, "'" + nombre + "' se anoto como " + tipoAnotado + ", pero se inicializa con un valor de tipo " + tipoInferido);
+            }
+            tipo = tipoAnotado;
+        }
 
         Simbolo variable = new Simbolo(nombre, tipo, CategoriaSimbolo.VARIABLE, linea, columna);
         if (!ambitoActual.declarar(variable)) {
@@ -116,6 +144,9 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
             return null;
         }
 
+        if (tipo.getCategoria() == Tipo.Categoria.CLASE || tipo.getCategoria() == Tipo.Categoria.ESTRUCTURA) {
+            cuartetas.agregar("decl", tipo.toString(), null, nombre);
+        }
         if (inicializadorCtx instanceof PigLatinParser.InicializadorEstructuraContext && tipo.getCategoria() == Tipo.Categoria.ESTRUCTURA) {
             SimboloEstructura estructura = global.buscarEstructura(tipo.getNombreDefinido());
             PigLatinParser.InicializadorEstructuraContext initEstructura = (PigLatinParser.InicializadorEstructuraContext) inicializadorCtx;
@@ -147,6 +178,12 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
         // presente devolveria "boolfalsus" pegado en vez de "falsus".
         String texto = ctx.VERUM() != null ? ctx.VERUM().getText() : ctx.FALSUS().getText();
         return new Operando(Tipo.BOOLEANO, texto);
+    }
+
+    /** 'esto obj : null : Persona ;' (Parte 2). */
+    @Override
+    public Operando visitInicializadorNulo(PigLatinParser.InicializadorNuloContext ctx) {
+        return new Operando(Tipo.NULO, "null");
     }
 
     @Override
@@ -245,7 +282,7 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
             cuartetas.agregar("param", a.getTexto(), null, null);
         }
         String temporal = cuartetas.nuevoTemporal();
-        cuartetas.agregar("new", clase.getNombre(), String.valueOf(args.size()), temporal);
+        cuartetas.agregar("new", clase.getNombre() + "#" + com.company.semantico.Etiquetas.firma(constructor), String.valueOf(args.size()), temporal);
         return temporal;
     }
 
@@ -262,18 +299,45 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
                 ctx.expresion(), ctx.tipoDato(), ctx.valoresArreglo(), ctx);
     }
 
+    /** Posicion plana i de una lista de valores -> "[f][c]..." (orden de filas); usa los tamanos literales. */
+    private String indicesPlanos(int i, List<String> tamanios) {
+        int dims = tamanios.size();
+        int[] idx = new int[dims];
+        int resto = i;
+        for (int k = dims - 1; k >= 1; k--) {
+            String t = tamanios.get(k);
+            int tam = t.matches("[0-9]+") ? Integer.parseInt(t) : 0;
+            if (tam == 0) {
+                idx[k] = 0;
+                continue;
+            }
+            idx[k] = resto % tam;
+            resto = resto / tam;
+        }
+        idx[0] = resto;
+        StringBuilder sb = new StringBuilder();
+        for (int k = 0; k < dims; k++) {
+            sb.append("[").append(idx[k]).append("]");
+        }
+        return sb.toString();
+    }
+
     private Operando declararVariableArreglo(String nombre, int linea, int columna,
-                                             PigLatinParser.ExpresionContext tamanoCtx,
+                                             List<PigLatinParser.ExpresionContext> tamanosCtx,
                                              PigLatinParser.TipoDatoContext tipoDatoCtx,
                                              PigLatinParser.ValoresArregloContext valoresArregloCtx,
                                              ParserRuleContext ctxError) {
-        Operando tamano = visit(tamanoCtx);
-        if (tamano.esValor() && tamano.getTipo().getCategoria() != Tipo.Categoria.ENTERO) {
-            reportarError(ctxError, "el tamano del arreglo debe ser entero, no " + tamano.getTipo());
+        List<String> textosTamanios = new ArrayList<>();
+        for (PigLatinParser.ExpresionContext tCtx : tamanosCtx) {
+            Operando tamano = visit(tCtx);
+            if (tamano.esValor() && tamano.getTipo().getCategoria() != Tipo.Categoria.ENTERO) {
+                reportarError(ctxError, "el tamano del arreglo debe ser entero, no " + tamano.getTipo());
+            }
+            textosTamanios.add(tamano.esValor() ? tamano.getTexto() : "0");
         }
 
         Tipo tipoElemento = resolvedorTipo.resolverTipoDato(tipoDatoCtx);
-        Tipo tipoArreglo = Tipo.arreglo(tipoElemento, 1);
+        Tipo tipoArreglo = Tipo.arreglo(tipoElemento, tamanosCtx.size());
 
         Simbolo variable = new Simbolo(nombre, tipoArreglo, CategoriaSimbolo.VARIABLE, linea, columna);
         if (!ambitoActual.declarar(variable)) {
@@ -281,7 +345,7 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
             return null;
         }
 
-        cuartetas.agregar("new_array", tipoElemento.toString(), tamano.esValor() ? tamano.getTexto() : "0", nombre);
+        cuartetas.agregar("new_array", tipoElemento.toString(), String.join(",", textosTamanios), nombre);
 
         if (valoresArregloCtx != null && valoresArregloCtx.listaExpresiones() != null) {
             List<PigLatinParser.ExpresionContext> valores = valoresArregloCtx.listaExpresiones().expresion();
@@ -291,7 +355,7 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
                     if (!tipoElemento.esCompatibleCon(v.getTipo())) {
                         reportarError(valores.get(i), "el elemento " + i + " de '" + nombre + "' deberia ser " + tipoElemento + ", se recibio " + v.getTipo());
                     } else {
-                        cuartetas.agregar("=", v.getTexto(), null, nombre + "[" + i + "]");
+                        cuartetas.agregar("=", v.getTexto(), null, nombre + indicesPlanos(i, textosTamanios));
                     }
                 }
             }
@@ -320,6 +384,14 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
 
     @Override
     public Operando visitAsignacion(PigLatinParser.AsignacionContext ctx) {
+        if (ctx.IDENTIFICADOR() != null) {
+            // 'x = novus C(...) : Tipo ;' - el tipo anotado debe existir y aceptar el valor asignado
+            Tipo anotado = global.resolverTipo(ctx.IDENTIFICADOR().getText());
+            if (anotado == null) {
+                reportarError(ctx, "'" + ctx.IDENTIFICADOR().getText() + "' no es un tipo conocido (revisa los 'import')");
+                return null;
+            }
+        }
         return manejarAsignacion(ctx, ctx.acceso(), ctx.expresion());
     }
 
@@ -339,7 +411,7 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
         if (!destino.esValor() || !valor.esValor()) {
             return null;
         }
-        if (!destino.getTipo().esCompatibleCon(valor.getTipo())) {
+        if (!destino.getTipo().esCompatibleConPolimorfismo(valor.getTipo(), global)) {
             reportarError(ctx, "no se puede asignar un valor de tipo " + valor.getTipo() + " a '" + destino.getTexto() + "' (" + destino.getTipo() + ")");
             return null;
         }
@@ -389,10 +461,12 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
     /** 'imprimir' de Pig Latin es una sentencia propia del lenguaje ('>>'), no una funcion como en Y?. */
     @Override
     public Operando visitImprimir(PigLatinParser.ImprimirContext ctx) {
-        for (PigLatinParser.ExpresionContext e : ctx.expresion()) {
-            Operando valor = visit(e);
+        // Un '>> a >> b ;' es UNA linea: solo la ultima expresion lleva el salto ("nl").
+        List<PigLatinParser.ExpresionContext> exprs = ctx.expresion();
+        for (int i = 0; i < exprs.size(); i++) {
+            Operando valor = visit(exprs.get(i));
             if (valor.esValor()) {
-                cuartetas.agregar("print", valor.getTexto(), null, null);
+                cuartetas.agregar("print", valor.getTexto(), null, i == exprs.size() - 1 ? "nl" : null);
             }
         }
         return null;
@@ -575,7 +649,30 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
 
     @Override
     public Operando visitExpAditiva(PigLatinParser.ExpAditivaContext ctx) {
-        return operacionAritmetica(ctx, ctx.expresion(0), ctx.expresion(1), ctx.op.getText());
+        String op = ctx.op.getText();
+        if (op.equals("+")) {
+            // '+' con una cadena de por medio concatena (el otro lado se convierte a texto)
+            Operando izq = visit(ctx.expresion(0));
+            Operando der = visit(ctx.expresion(1));
+            if (!izq.esValor() || !der.esValor()) {
+                return Operando.error();
+            }
+            if (izq.getTipo().getCategoria() == Tipo.Categoria.CADENA || der.getTipo().getCategoria() == Tipo.Categoria.CADENA) {
+                String temporal = cuartetas.nuevoTemporal();
+                cuartetas.agregar("concat", izq.getTexto(), der.getTexto(), temporal);
+                return new Operando(Tipo.CADENA, temporal);
+            }
+            if (!izq.getTipo().esNumerico() || !der.getTipo().esNumerico()) {
+                reportarError(ctx, "'+' solo aplica entre valores numericos (o cadenas para concatenar), no " + izq.getTipo() + " y " + der.getTipo());
+                return Operando.error();
+            }
+            Tipo resultado = (izq.getTipo().getCategoria() == Tipo.Categoria.DECIMAL || der.getTipo().getCategoria() == Tipo.Categoria.DECIMAL)
+                    ? Tipo.DECIMAL : Tipo.ENTERO;
+            String temporal = cuartetas.nuevoTemporal();
+            cuartetas.agregar("+", izq.getTexto(), der.getTexto(), temporal);
+            return new Operando(resultado, temporal);
+        }
+        return operacionAritmetica(ctx, ctx.expresion(0), ctx.expresion(1), op);
     }
 
     private Operando operacionAritmetica(ParserRuleContext ctx, PigLatinParser.ExpresionContext ei, PigLatinParser.ExpresionContext ed, String op) {
@@ -638,7 +735,15 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
     }
 
     private Operando operacionLogica(ParserRuleContext ctx, PigLatinParser.ExpresionContext ei, PigLatinParser.ExpresionContext ed, String op) {
+        // Cortocircuito (como Java/C): el lado derecho solo se evalua si hace falta,
+        // asi 'x != null && x.activo()' no llama a un metodo sobre null.
         Operando izq = visit(ei);
+        String temporal = cuartetas.nuevoTemporal();
+        String etiquetaFin = cuartetas.nuevaEtiqueta();
+        if (izq.esValor()) {
+            cuartetas.agregar("=", izq.getTexto(), null, temporal);
+            cuartetas.agregar("&&".equals(op) ? "if_false" : "if_true", temporal, null, etiquetaFin);
+        }
         Operando der = visit(ed);
         if (!izq.esValor() || !der.esValor()) {
             return Operando.error();
@@ -647,8 +752,8 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
             reportarError(ctx, "'" + op + "' solo aplica entre valores booleanos, no " + izq.getTipo() + " y " + der.getTipo());
             return Operando.error();
         }
-        String temporal = cuartetas.nuevoTemporal();
-        cuartetas.agregar(op, izq.getTexto(), der.getTexto(), temporal);
+        cuartetas.agregar("=", der.getTexto(), null, temporal);
+        cuartetas.agregar("label", null, null, etiquetaFin);
         return new Operando(Tipo.BOOLEANO, temporal);
     }
 
@@ -672,6 +777,7 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
         if (ctx.DECIMAL() != null) return new Operando(Tipo.DECIMAL, ctx.DECIMAL().getText());
         if (ctx.CADENA() != null) return new Operando(Tipo.CADENA, ctx.CADENA().getText());
         if (ctx.CARACTER() != null) return new Operando(Tipo.CARACTER, ctx.CARACTER().getText());
+        if (ctx.getText().equals("null")) return new Operando(Tipo.NULO, "null");
         return new Operando(Tipo.BOOLEANO, ctx.getText()); // 'verum' / 'falsus'
     }
 
@@ -695,6 +801,11 @@ public class PigLatinAnalizador extends PigLatinBaseVisitor<Operando> {
     private SimboloInvocable buscarPorFirma(List<SimboloInvocable> candidatos, List<Tipo> tipos) {
         for (SimboloInvocable c : candidatos) {
             if (c.mismaFirma(tipos)) {
+                return c;
+            }
+        }
+        for (SimboloInvocable c : candidatos) {
+            if (c.aceptaArgumentos(tipos, global)) {
                 return c;
             }
         }

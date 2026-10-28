@@ -126,6 +126,13 @@ public class ResolvedorAccesoPigLatin {
                         reportarError(sufijo, "'" + textoActual + "' no tiene un campo '" + nombreMiembro + "'");
                         return Operando.error();
                     }
+                    // Pig Latin nunca esta dentro de una clase: solo accede a public/default.
+                    if (campo.getVisibilidad() == com.company.semantico.Visibilidad.PRIVATE
+                            || campo.getVisibilidad() == com.company.semantico.Visibilidad.PROTECTED) {
+                        reportarError(sufijo, "el campo '" + nombreMiembro + "' es " + campo.getVisibilidad().name().toLowerCase()
+                                + ", no se puede acceder desde Pig Latin");
+                        return Operando.error();
+                    }
                     tipoActual = campo.getTipo();
                     textoActual = textoActual + "." + nombreMiembro;
                     i++;
@@ -146,7 +153,7 @@ public class ResolvedorAccesoPigLatin {
         }
         if (tipoActual.getCategoria() == Tipo.Categoria.CLASE) {
             SimboloClase clase = global.buscarClase(tipoActual.getNombreDefinido());
-            return clase != null ? clase.buscarCampo(nombreMiembro) : null;
+            return clase != null ? clase.buscarCampoHeredado(nombreMiembro, global) : null;
         }
         return null;
     }
@@ -167,9 +174,15 @@ public class ResolvedorAccesoPigLatin {
         if (contieneError(args)) {
             return Operando.error();
         }
-        SimboloInvocable metodo = buscarPorFirma(clase.buscarMetodos(nombreMetodo), tiposDe(args));
+        SimboloInvocable metodo = buscarPorFirma(clase.buscarMetodosHeredados(nombreMetodo, global), tiposDe(args));
         if (metodo == null) {
             reportarError(ctxError, "'" + clase.getNombre() + "' no tiene un metodo '" + nombreMetodo + "' que reciba esos " + args.size() + " argumento(s)");
+            return Operando.error();
+        }
+        if (metodo.getVisibilidad() == com.company.semantico.Visibilidad.PRIVATE
+                || metodo.getVisibilidad() == com.company.semantico.Visibilidad.PROTECTED) {
+            reportarError(ctxError, "el metodo '" + nombreMetodo + "' es " + metodo.getVisibilidad().name().toLowerCase()
+                    + ", no se puede llamar desde Pig Latin");
             return Operando.error();
         }
         for (Operando a : args) {
@@ -177,11 +190,11 @@ public class ResolvedorAccesoPigLatin {
         }
         cuartetas.agregar("param", textoBase, null, null); // receptor implicito
         if (metodo.getTipoRetorno().getCategoria() == Tipo.Categoria.VOID) {
-            cuartetas.agregar("call", textoBase + "." + nombreMetodo, String.valueOf(args.size()), null);
+            cuartetas.agregar("call", textoBase + "." + nombreMetodo + "#" + com.company.semantico.Etiquetas.firma(metodo), String.valueOf(args.size()), null);
             return Operando.sinValor();
         }
         String temporal = cuartetas.nuevoTemporal();
-        cuartetas.agregar("call", textoBase + "." + nombreMetodo, String.valueOf(args.size()), temporal);
+        cuartetas.agregar("call", textoBase + "." + nombreMetodo + "#" + com.company.semantico.Etiquetas.firma(metodo), String.valueOf(args.size()), temporal);
         return new Operando(metodo.getTipoRetorno(), temporal);
     }
 
@@ -244,6 +257,11 @@ public class ResolvedorAccesoPigLatin {
     private SimboloInvocable buscarPorFirma(List<SimboloInvocable> candidatos, List<Tipo> tipos) {
         for (SimboloInvocable c : candidatos) {
             if (c.mismaFirma(tipos)) {
+                return c;
+            }
+        }
+        for (SimboloInvocable c : candidatos) {
+            if (c.aceptaArgumentos(tipos, global)) {
                 return c;
             }
         }

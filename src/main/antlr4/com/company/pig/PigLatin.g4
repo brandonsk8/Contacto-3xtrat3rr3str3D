@@ -37,9 +37,19 @@ seccionPrincipal
 
 // ---- Declaraciones ----
 
+// Parte 2: una declaracion de OBJETO (inicializadorObjeto o 'null')
+// puede llevar, despues del inicializador, un ':' seguido del tipo
+// declarado explicitamente (':' IDENTIFICADOR) - asi lo muestra el
+// enunciado: 'esto miObjeto : novus Persona(...) : Persona ;' y
+// 'esto otroObjeto : null : Persona ;'. Es OPCIONAL (no rompe las
+// declaraciones de numerus/textum/etc. del Proyecto 1, que nunca lo
+// llevan) y se valida en el analizador semantico (que el tipo anotado
+// coincida con el tipo real del inicializador), no aqui.
 declaracion
-    : 'esto' IDENTIFICADOR ':' inicializador ';'                                  # declaracionSimple
-    | 'series' IDENTIFICADOR '[' expresion ']' ':' tipoDato valoresArreglo? ';'    # declaracionArreglo
+    : 'esto' IDENTIFICADOR ':' inicializador (':' IDENTIFICADOR)? ';'              # declaracionSimple
+    | 'series' IDENTIFICADOR ('[' expresion ']')+ ':' tipoDato valoresArreglo? ';'    # declaracionArreglo
+    // 'esto obj : Tipo ;' = objeto declarado sin inicializar (queda en null), igual que 'esto obj : null : Tipo ;'
+    | 'esto' IDENTIFICADOR ':' IDENTIFICADOR ';'                                      # declaracionObjetoSinInicializar
     ;
 
 inicializador
@@ -52,6 +62,7 @@ inicializador
     | 'bool'? ( 'verum' | 'falsus' )        # inicializadorBooleano
     | IDENTIFICADOR valoresEstructura      # inicializadorEstructura
     | 'novus' IDENTIFICADOR '(' listaArgumentos? ')'  # inicializadorObjeto
+    | 'null'                                # inicializadorNulo
     ;
 
 tipoPrimitivo
@@ -112,7 +123,7 @@ sentencia
     ;
 
 asignacion
-    : acceso '=' expresion ';'
+    : acceso '=' expresion (':' IDENTIFICADOR)? ';'
     ;
 
 // acceso cubre: variable simple, campo.de.estructura, arreglo[i],
@@ -171,7 +182,7 @@ cicloPara
 // (esto i : numerus 0;; i < 10; ...), que ningun archivo real escribe.
 forInit
     : 'esto' IDENTIFICADOR ':' inicializador                                 # forInitDeclaracionSimple
-    | 'series' IDENTIFICADOR '[' expresion ']' ':' tipoDato valoresArreglo?  # forInitDeclaracionArreglo
+    | 'series' IDENTIFICADOR ('[' expresion ']')+ ':' tipoDato valoresArreglo?  # forInitDeclaracionArreglo
     | asignacionSinFin                                                       # forInitAsignacion
     ;
 
@@ -228,6 +239,11 @@ expresion
     | expresion '&&' expresion                              # expAnd
     | expresion '||' expresion                               # expOr
     | '(' expresion ')'                                      # expParentesis
+    // Permite reasignar una variable existente a un objeto nuevo
+    // (ej. 'juego = novus Juego(nombre);'), no solo inicializarla en su
+    // declaracion (ver 'inicializadorObjeto' arriba, mismo patron). Al
+    // empezar con el token unico 'novus' no hay ambiguedad con 'acceso'
+    // (que empieza con IDENTIFICADOR) ni con 'literal'.
     | 'novus' IDENTIFICADOR '(' listaArgumentos? ')'         # expObjetoNuevo
     | acceso                                                 # expAcceso
     | literal                                                # expLiteral
@@ -240,6 +256,7 @@ literal
     | CARACTER
     | 'verum'
     | 'falsus'
+    | 'null'
     ;
 
 // -------------------- LEXER --------------------
@@ -263,6 +280,7 @@ DECIMALIS       : 'decimalis';
 LITTERA         : 'littera';
 VERUM           : 'verum';
 FALSUS          : 'falsus';
+NULO            : 'null';
 FINIS_BLOQUE    : 'finis';
 FINIS_PROGRAMA  : 'FINIS';
 MARCADOR_VARS   : 'VARIABILES>';

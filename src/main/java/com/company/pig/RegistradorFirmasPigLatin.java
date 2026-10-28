@@ -42,26 +42,65 @@ public class RegistradorFirmasPigLatin {
     private final GestorErrores errores;
     private final Path directorioBase;
 
+    // Resuelve los import de Pig Latin y registra las firmas importadas.
     public RegistradorFirmasPigLatin(TablaSimbolosGlobal global, GestorErrores errores, Path directorioBase) {
         this.global = global;
         this.errores = errores;
         this.directorioBase = directorioBase;
     }
 
+    // Procesa los import y registra clases y funciones.
     public List<ArchivoImportado> registrar(PigLatinParser.ProgramaContext ctx) throws IOException {
         List<ArchivoImportado> archivos = new ArrayList<>();
         if (ctx.listaImportaciones() == null) {
             return archivos;
         }
+        // Etapa 1: leer todos los archivos y declarar el NOMBRE de cada clase,
+        // para que el orden de los 'import' no importe.
         for (PigLatinParser.ImportacionContext imp : ctx.listaImportaciones().importacion()) {
             ArchivoImportado archivo = procesarImportacion(imp);
             if (archivo != null) {
                 archivos.add(archivo);
             }
         }
+        // Etapa 2: firmas. Las clases se registran con su superclase primero
+        // (para validar '@Override'); las estructuras/funciones de Y? en el orden dado.
+        List<ArchivoImportado> pendientes = new ArrayList<>(archivos);
+        for (ArchivoImportado a : archivos) {
+            if (!a.esZetariano()) {
+                errores.setArchivoActual(a.getNombreArchivo());
+                new RegistradorFirmasY(global, errores).registrar(a.getArbolY());
+                errores.setArchivoActual(null);
+                pendientes.remove(a);
+            }
+        }
+        while (!pendientes.isEmpty()) {
+            ArchivoImportado elegido = null;
+            for (ArchivoImportado a : pendientes) {
+                String sup = a.getClase().getNombreSuperclase();
+                boolean padrePendiente = false;
+                for (ArchivoImportado otro : pendientes) {
+                    if (otro != a && sup != null && otro.getClase().getNombre().equals(sup)) {
+                        padrePendiente = true;
+                    }
+                }
+                if (!padrePendiente) {
+                    elegido = a;
+                    break;
+                }
+            }
+            if (elegido == null) {
+                elegido = pendientes.get(0); // herencia circular: se registra igual; el ciclo se reporta al usar la clase
+            }
+            errores.setArchivoActual(elegido.getNombreArchivo());
+            new RegistradorFirmasZetariano(global, errores).registrarMiembros(elegido.getArbolZetariano(), elegido.getClase());
+            errores.setArchivoActual(null);
+            pendientes.remove(elegido);
+        }
         return archivos;
     }
 
+    // Lee un import (.y/.z), valida su sintaxis y fija su paquete.
     private ArchivoImportado procesarImportacion(PigLatinParser.ImportacionContext ctx) throws IOException {
         List<String> segmentos = new ArrayList<>();
         for (TerminalNode id : ctx.ruta().IDENTIFICADOR()) {
@@ -82,6 +121,26 @@ public class RegistradorFirmasPigLatin {
             directorio = directorio.resolve(segmentos.get(i));
         }
         Path archivo = directorio.resolve(nombreArchivo + "." + extension);
+        if (!java.nio.file.Files.exists(archivo)) {
+            // Archivos con puntos en el nombre (ej. 'Unidad.java.z'): 'a.b.Unidad.java.z' puede ser
+            // a/b/Unidad.java.z. Se prueba pegando los ultimos segmentos con '.' hasta encontrarlo.
+            for (int corte = segmentos.size() - 3; corte >= 0; corte--) {
+                Path dir = directorioBase;
+                for (int i = 0; i < corte; i++) {
+                    dir = dir.resolve(segmentos.get(i));
+                }
+                String nombre = String.join(".", segmentos.subList(corte, segmentos.size() - 1));
+                Path candidato = dir.resolve(nombre + "." + extension);
+                if (java.nio.file.Files.exists(candidato)) {
+                    archivo = candidato;
+                    nombreArchivo = nombre;
+                    segmentos = new ArrayList<>(segmentos.subList(0, corte));
+                    segmentos.add(nombre);
+                    segmentos.add(extension);
+                    break;
+                }
+            }
+        }
 
         // Nombre para mostrar en errores (no la ruta real del disco), ej. "Nodo.z" o "utils/utils.y"
         List<String> partesNombreMostrado = new ArrayList<>(segmentos.subList(0, segmentos.size() - 2));
@@ -89,23 +148,62 @@ public class RegistradorFirmasPigLatin {
         String nombreMostrado = String.join("/", partesNombreMostrado) + "." + extension;
 
         if (extension.equals("y")) {
-            YParser parser = new YParser(new CommonTokenStream(new YLexer(CharStreams.fromPath(archivo))));
+            YLexer lexerY = new YLexer(CharStreams.fromPath(archivo));
+            YParser parser = new YParser(new CommonTokenStream(lexerY));
+            ErroresSintaxisImport colectorY = new ErroresSintaxisImport();
+            lexerY.removeErrorListeners();
+            lexerY.addErrorListener(colectorY);
+            parser.removeErrorListeners();
+            parser.addErrorListener(colectorY);
             YParser.ProgramaContext arbol = parser.programa();
-            errores.setArchivoActual(nombreMostrado);
-            new RegistradorFirmasY(global, errores).registrar(arbol);
-            errores.setArchivoActual(null);
+            if (colectorY.reportar(errores, nombreMostrado)) {
+                return null; // con errores de sintaxis no se analiza el archivo
+            }
             return ArchivoImportado.deY(arbol, nombreMostrado);
         }
         if (extension.equals("z")) {
-            ZetarianoParser parser = new ZetarianoParser(new CommonTokenStream(new ZetarianoLexer(CharStreams.fromPath(archivo))));
+            ZetarianoLexer lexerZ = new ZetarianoLexer(CharStreams.fromPath(archivo));
+            ZetarianoParser parser = new ZetarianoParser(new CommonTokenStream(lexerZ));
+            ErroresSintaxisImport colectorZ = new ErroresSintaxisImport();
+            lexerZ.removeErrorListeners();
+            lexerZ.addErrorListener(colectorZ);
+            parser.removeErrorListeners();
+            parser.addErrorListener(colectorZ);
             ZetarianoParser.ProgramaContext arbol = parser.programa();
+            if (colectorZ.reportar(errores, nombreMostrado)) {
+                return null;
+            }
             errores.setArchivoActual(nombreMostrado);
-            SimboloClase clase = new RegistradorFirmasZetariano(global, errores).registrar(arbol);
+            SimboloClase clase = new RegistradorFirmasZetariano(global, errores).declarar(arbol);
             errores.setArchivoActual(null);
+            if (clase != null) {
+                clase.setPaquete(String.join("/", segmentos.subList(0, segmentos.size() - 2)));
+            }
             return ArchivoImportado.deZetariano(arbol, clase, nombreMostrado);
         }
 
         errores.reportar(linea, columna, "extension de import desconocida: '" + extension + "' (se esperaba .y o .z)");
         return null;
+    }
+
+    /** Junta los errores lexicos/sintacticos de un archivo importado para reportarlos con su nombre. */
+    private static final class ErroresSintaxisImport extends org.antlr.v4.runtime.BaseErrorListener {
+        private final List<String[]> items = new ArrayList<>();
+
+        @Override
+        public void syntaxError(org.antlr.v4.runtime.Recognizer<?, ?> recognizer, Object offendingSymbol, int linea,
+                                int columna, String mensaje, org.antlr.v4.runtime.RecognitionException e) {
+            items.add(new String[]{String.valueOf(linea), String.valueOf(columna), mensaje});
+        }
+
+        /** @return true si hubo errores (ya reportados en 'errores'). */
+        boolean reportar(GestorErrores errores, String archivo) {
+            for (String[] it : items) {
+                errores.setArchivoActual(archivo);
+                errores.reportar(Integer.parseInt(it[0]), Integer.parseInt(it[1]), "error de sintaxis: " + it[2]);
+            }
+            errores.setArchivoActual(null);
+            return !items.isEmpty();
+        }
     }
 }
