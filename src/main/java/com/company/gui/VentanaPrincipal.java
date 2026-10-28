@@ -15,6 +15,7 @@ import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
+import javax.swing.JTabbedPane;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextPane;
@@ -63,16 +64,32 @@ import java.util.List;
  */
 public class VentanaPrincipal extends JFrame {
 
+    static {
+        Tema.aplicar(true);
+    }
+
     private final EjecutorPipeline ejecutor = new EjecutorPipeline();
+    private AreaNumerosLinea gutter;
+    private JSplitPane dividirEditorYPestanas;
+    private JLabel etiquetaResumen;
+    private JButton btnEjecutarRef;
+    private JButton btnCorrerRef;
 
     private JTree arbolArchivos;
     private JTextPane editor;
     private JTextArea consola;
+    private JTextArea areaCodigoC;
+    private JTextArea areaCodigoAsm;
+    private JTextArea areaCodigoC3d;
+    private String ultimoCodigoC3dGenerado;
+    private PanelEjecucion panelEjecucion;
+    private JTabbedPane pestanasInferiores;
     private JLabel etiquetaArchivoActual;
 
     private Path carpetaProyecto;
     private Path archivoAbierto;
     private String ultimoCodigoCGenerado;
+    private String ultimoCodigoAsmGenerado;
     private TablaSimbolosGlobal ultimaTablaSimbolos;
 
     public VentanaPrincipal() {
@@ -84,7 +101,15 @@ public class VentanaPrincipal extends JFrame {
         setJMenuBar(construirBarraMenu());
         add(construirBarraHerramientas(), BorderLayout.NORTH);
         add(construirCuerpo(), BorderLayout.CENTER);
+        instalarMenuContextualArbol();
         add(construirBarraEstado(), BorderLayout.SOUTH);
+        aplicarColoresComponentes();
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowOpened(java.awt.event.WindowEvent e) {
+                dividirEditorYPestanas.setDividerLocation(0.58);
+            }
+        });
     }
 
     /**
@@ -102,9 +127,13 @@ public class VentanaPrincipal extends JFrame {
         menuArchivo.addSeparator();
         agregarItem(menuArchivo, "Guardar", e -> guardarArchivoActual());
         agregarItem(menuArchivo, "Guardar como...", e -> guardarComo());
+        menuArchivo.addSeparator();
+        agregarItem(menuArchivo, "Abrir archivo...", e -> abrirArchivoSuelto());
+        agregarItem(menuArchivo, "Descargar selección (archivo o carpeta .zip)...", e -> descargarSeleccion());
 
         JMenu menuVer = new JMenu("Ver");
         agregarItem(menuVer, "Tabla de símbolos", e -> mostrarTablaSimbolos());
+        agregarItem(menuVer, "Cambiar tema claro / oscuro", e -> alternarTema());
 
         barraMenu.add(menuArchivo);
         barraMenu.add(menuVer);
@@ -122,14 +151,34 @@ public class VentanaPrincipal extends JFrame {
         JToolBar barra = new JToolBar();
         barra.setFloatable(false);
 
-        JButton btnCorrer = new JButton("Correr");
+        JButton btnCorrer = new BotonAccion("Compilar", false);
         btnCorrer.addActionListener(e -> correrArchivoActual());
 
-        JButton btnGuardarCodigoC = new JButton("Guardar código C...");
+        JButton btnEjecutar = new BotonAccion("\u25B6  Compilar y ejecutar", true);
+        btnEjecutar.addActionListener(e -> ejecutarArchivoActual());
+
+        JButton btnGuardarCodigoC = new BotonAccion("Guardar C", false);
         btnGuardarCodigoC.addActionListener(e -> guardarCodigoCGenerado());
 
+        JButton btnGuardarC3d = new BotonAccion("Guardar .c3d", false);
+        btnGuardarC3d.addActionListener(e -> guardarCodigoGenerado(ultimoCodigoC3dGenerado, ".c3d", "de tres direcciones"));
+
+        JButton btnGuardarAsm = new BotonAccion("Guardar RISC-V", false);
+        btnGuardarAsm.addActionListener(e -> guardarCodigoGenerado(ultimoCodigoAsmGenerado, ".asm", "RISC-V"));
+
+        btnCorrerRef = btnCorrer;
+        btnEjecutarRef = btnEjecutar;
+        barra.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
         barra.add(btnCorrer);
+        barra.add(javax.swing.Box.createHorizontalStrut(6));
+        barra.add(btnEjecutar);
+        barra.add(javax.swing.Box.createHorizontalStrut(6));
+        barra.add(javax.swing.Box.createHorizontalStrut(10));
+        barra.add(btnGuardarC3d);
+        barra.add(javax.swing.Box.createHorizontalStrut(6));
         barra.add(btnGuardarCodigoC);
+        barra.add(javax.swing.Box.createHorizontalStrut(6));
+        barra.add(btnGuardarAsm);
         return barra;
     }
 
@@ -137,11 +186,28 @@ public class VentanaPrincipal extends JFrame {
         arbolArchivos = new JTree(new DefaultMutableTreeNode("(sin proyecto abierto)"));
         arbolArchivos.getSelectionModel().setSelectionMode(TreeSelectionModel.SINGLE_TREE_SELECTION);
         arbolArchivos.addTreeSelectionListener(this::alSeleccionarEnArbol);
+        arbolArchivos.setRowHeight(24);
+        arbolArchivos.setCellRenderer(new javax.swing.tree.DefaultTreeCellRenderer() {
+            @Override
+            public java.awt.Component getTreeCellRendererComponent(JTree t, Object v, boolean sel, boolean exp,
+                                                                    boolean leaf, int row, boolean foco) {
+                Object o = v instanceof DefaultMutableTreeNode ? ((DefaultMutableTreeNode) v).getUserObject() : v;
+                String txt = o instanceof File ? (row == 0 ? ((File) o).getName() : ((File) o).getName()) : String.valueOf(o);
+                super.getTreeCellRendererComponent(t, txt, sel, exp, leaf, row, foco);
+                setBackgroundNonSelectionColor(Tema.panel);
+                setBackgroundSelectionColor(Tema.seleccion);
+                setTextNonSelectionColor(Tema.texto);
+                setTextSelectionColor(Tema.oscuroTexto());
+                setBorderSelectionColor(null);
+                return this;
+            }
+        });
         JScrollPane panelArbol = new JScrollPane(arbolArchivos);
         panelArbol.setPreferredSize(new Dimension(280, 0));
 
         editor = new EditorSinAjusteDeLinea();
-        editor.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 14));
+        editor.setFont(Tema.fuenteCodigo(14));
+        editor.setMargin(new java.awt.Insets(6, 8, 6, 8));
         // Reresalta con cada tecla/pegado - solo en insertUpdate/removeUpdate,
         // nunca en changedUpdate (ver el Javadoc de Resaltador: evita el bucle
         // infinito, porque aplicar() cambia atributos y eso SI dispara changedUpdate).
@@ -156,27 +222,117 @@ public class VentanaPrincipal extends JFrame {
             public void changedUpdate(DocumentEvent e) { /* intencional: ver Javadoc de Resaltador */ }
         });
         JScrollPane panelEditor = new JScrollPane(editor);
-        panelEditor.setRowHeaderView(new AreaNumerosLinea(editor));
+        gutter = new AreaNumerosLinea(editor);
+        panelEditor.setRowHeaderView(gutter);
 
-        consola = new JTextArea();
-        consola.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
-        consola.setEditable(false);
-        consola.setLineWrap(true);
-        consola.setWrapStyleWord(true);
-        JScrollPane panelConsola = new JScrollPane(consola);
+        consola = crearAreaSoloLectura();
+        areaCodigoC = crearAreaSoloLectura();
+        areaCodigoAsm = crearAreaSoloLectura();
+        areaCodigoC3d = crearAreaSoloLectura();
+        panelEjecucion = new PanelEjecucion();
+        // doble clic en un error del reporte ("linea L:C - ...") salta a esa linea del editor
+        consola.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getClickCount() == 2) {
+                    saltarALineaDeError();
+                }
+            }
+        });
 
-        JSplitPane editorYConsola = new JSplitPane(JSplitPane.VERTICAL_SPLIT, panelEditor, panelConsola);
-        editorYConsola.setResizeWeight(0.7);
+        pestanasInferiores = new JTabbedPane();
+        pestanasInferiores.addTab("Reporte", new JScrollPane(consola));
+        pestanasInferiores.addTab("Ejecución", panelEjecucion);
+        pestanasInferiores.addTab("Cuartetas (C3D)", new JScrollPane(areaCodigoC3d));
+        pestanasInferiores.addTab("C generado", new JScrollPane(areaCodigoC));
+        pestanasInferiores.addTab("RISC-V generado", new JScrollPane(areaCodigoAsm));
+
+        JSplitPane editorYConsola = new JSplitPane(JSplitPane.VERTICAL_SPLIT, panelEditor, pestanasInferiores);
+        editorYConsola.setResizeWeight(0.55);
+        dividirEditorYPestanas = editorYConsola;
 
         JSplitPane completo = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, panelArbol, editorYConsola);
         completo.setResizeWeight(0.0);
         return completo;
     }
 
-    private JLabel construirBarraEstado() {
+    private JTextArea crearAreaSoloLectura() {
+        JTextArea area = new JTextArea();
+        area.setFont(Tema.fuenteCodigo(13));
+        area.setMargin(new java.awt.Insets(6, 8, 6, 8));
+        area.setEditable(false);
+        return area;
+    }
+
+    private javax.swing.JPanel construirBarraEstado() {
         etiquetaArchivoActual = new JLabel(" (ningun archivo abierto)");
-        etiquetaArchivoActual.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
-        return etiquetaArchivoActual;
+        etiquetaResumen = new JLabel(" ");
+        javax.swing.JPanel barra = new javax.swing.JPanel(new BorderLayout());
+        barra.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
+        barra.add(etiquetaArchivoActual, BorderLayout.WEST);
+        barra.add(etiquetaResumen, BorderLayout.EAST);
+        return barra;
+    }
+
+    // ---------------- tema ----------------
+
+    private void alternarTema() {
+        Tema.aplicar(!Tema.esOscuro());
+        SwingUtilities.updateComponentTreeUI(this);
+        aplicarColoresComponentes();
+        resaltarActual();
+    }
+
+    private void aplicarColoresComponentes() {
+        getContentPane().setBackground(Tema.fondo);
+        editor.setBackground(Tema.editorFondo);
+        editor.setForeground(Tema.texto);
+        editor.setCaretColor(Tema.texto);
+        editor.setSelectionColor(Tema.seleccion);
+        for (JTextArea a : new JTextArea[]{consola, areaCodigoC, areaCodigoAsm, areaCodigoC3d}) {
+            a.setBackground(Tema.consolaFondo);
+            a.setForeground(Tema.texto);
+            a.setCaretColor(Tema.texto);
+            a.setSelectionColor(Tema.seleccion);
+        }
+        arbolArchivos.setBackground(Tema.panel);
+        gutter.setBackground(Tema.gutterFondo);
+        gutter.setForeground(Tema.gutterTexto);
+        etiquetaArchivoActual.setForeground(Tema.textoSuave);
+        etiquetaResumen.setForeground(Tema.textoSuave);
+        panelEjecucion.aplicarTema();
+        repaint();
+    }
+
+    private void saltarALineaDeError() {
+        try {
+            int pos = consola.getCaretPosition();
+            int linea = consola.getLineOfOffset(pos);
+            String texto = consola.getText(consola.getLineStartOffset(linea),
+                    consola.getLineEndOffset(linea) - consola.getLineStartOffset(linea));
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("[Ll][ií]nea\\s+(\\d+)").matcher(texto);
+            if (!m.find()) {
+                return;
+            }
+            int destino = Integer.parseInt(m.group(1));
+            String contenido = editor.getDocument().getText(0, editor.getDocument().getLength());
+            int offset = 0;
+            for (int i = 1; i < destino; i++) {
+                int salto = contenido.indexOf('\n', offset);
+                if (salto < 0) {
+                    break;
+                }
+                offset = salto + 1;
+            }
+            editor.requestFocusInWindow();
+            editor.setCaretPosition(offset);
+            Rectangle2D r = editor.modelToView2D(offset);
+            if (r != null) {
+                editor.scrollRectToVisible(r.getBounds());
+            }
+        } catch (Exception ignorada) {
+            // un error al saltar no debe romper la ventana
+        }
     }
 
     // ---------------- accion: abrir carpeta de proyecto ----------------
@@ -316,6 +472,133 @@ public class VentanaPrincipal extends JFrame {
         }
     }
 
+
+    // ---------------- accion: abrir archivo suelto / descargar ----------------
+
+    private void abrirArchivoSuelto() {
+        JFileChooser selector = new JFileChooser();
+        if (carpetaProyecto != null) {
+            selector.setCurrentDirectory(carpetaProyecto.toFile());
+        }
+        selector.setDialogTitle("Abrir archivo (.y, .z, .pig)");
+        if (selector.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            abrirArchivoEnEditor(selector.getSelectedFile().toPath());
+        }
+    }
+
+    /** Elemento elegido en el arbol (archivo o carpeta); sin seleccion, la raiz del proyecto. */
+    private Path elementoSeleccionado() {
+        Object nodo = arbolArchivos.getLastSelectedPathComponent();
+        if (nodo instanceof DefaultMutableTreeNode) {
+            Object valor = ((DefaultMutableTreeNode) nodo).getUserObject();
+            if (valor instanceof File) {
+                return ((File) valor).toPath();
+            }
+        }
+        return carpetaProyecto;
+    }
+
+    /**
+     * "Descargar": copia el archivo seleccionado al lugar que elija la
+     * persona; si es una carpeta la empaqueta en un .zip conservando la
+     * estructura de subcarpetas.
+     */
+    private void descargarSeleccion() {
+        Path origen = elementoSeleccionado();
+        if (origen == null || !Files.exists(origen)) {
+            JOptionPane.showMessageDialog(this, "Abre una carpeta de proyecto y selecciona un archivo o carpeta.",
+                    "Descargar", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        boolean esCarpeta = Files.isDirectory(origen);
+        JFileChooser selector = new JFileChooser();
+        selector.setDialogTitle("Descargar " + (esCarpeta ? "carpeta como .zip" : "archivo"));
+        String nombre = origen.getFileName() == null ? "proyecto" : origen.getFileName().toString();
+        selector.setSelectedFile(new File(esCarpeta ? nombre + ".zip" : nombre));
+        if (selector.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        Path destino = selector.getSelectedFile().toPath();
+        if (esCarpeta && !destino.getFileName().toString().toLowerCase().endsWith(".zip")) {
+            destino = destino.resolveSibling(destino.getFileName() + ".zip");
+        }
+        if (Files.exists(destino)) {
+            int confirmar = JOptionPane.showConfirmDialog(this,
+                    "'" + destino.getFileName() + "' ya existe. ¿Sobrescribir?",
+                    "Confirmar sobrescritura", JOptionPane.YES_NO_OPTION);
+            if (confirmar != JOptionPane.YES_OPTION) {
+                return;
+            }
+        }
+        try {
+            if (esCarpeta) {
+                comprimirCarpeta(origen, destino);
+            } else {
+                if (origen.equals(archivoAbierto)) {
+                    Files.writeString(destino, editor.getText(), StandardCharsets.UTF_8);
+                } else {
+                    Files.copy(origen, destino, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+            JOptionPane.showMessageDialog(this, "Descargado en:\n" + destino, "Descargar",
+                    JOptionPane.INFORMATION_MESSAGE);
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this, "No se pudo descargar:\n" + ex.getMessage(),
+                    "Error al descargar", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private static void comprimirCarpeta(Path carpeta, Path zip) throws IOException {
+        try (java.util.zip.ZipOutputStream salida = new java.util.zip.ZipOutputStream(Files.newOutputStream(zip));
+             java.util.stream.Stream<Path> recorrido = Files.walk(carpeta)) {
+            for (Path p : (Iterable<Path>) recorrido::iterator) {
+                if (p.equals(carpeta) || p.equals(zip)) {
+                    continue;
+                }
+                String nombre = carpeta.relativize(p).toString().replace('\\', '/');
+                if (Files.isDirectory(p)) {
+                    salida.putNextEntry(new java.util.zip.ZipEntry(nombre + "/"));
+                    salida.closeEntry();
+                } else {
+                    salida.putNextEntry(new java.util.zip.ZipEntry(nombre));
+                    Files.copy(p, salida);
+                    salida.closeEntry();
+                }
+            }
+        }
+    }
+
+    /** Menu contextual (clic derecho) del arbol de archivos. */
+    private void instalarMenuContextualArbol() {
+        javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+        JMenuItem nuevoArchivo = new JMenuItem("Nuevo archivo...");
+        nuevoArchivo.addActionListener(e -> crearNuevoElemento(false));
+        JMenuItem nuevaCarpeta = new JMenuItem("Nueva carpeta...");
+        nuevaCarpeta.addActionListener(e -> crearNuevoElemento(true));
+        JMenuItem descargar = new JMenuItem("Descargar...");
+        descargar.addActionListener(e -> descargarSeleccion());
+        JMenuItem actualizar = new JMenuItem("Actualizar");
+        actualizar.addActionListener(e -> refrescarArbol());
+        menu.add(nuevoArchivo);
+        menu.add(nuevaCarpeta);
+        menu.addSeparator();
+        menu.add(descargar);
+        menu.add(actualizar);
+        arbolArchivos.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override public void mousePressed(java.awt.event.MouseEvent e) { mostrar(e); }
+            @Override public void mouseReleased(java.awt.event.MouseEvent e) { mostrar(e); }
+            private void mostrar(java.awt.event.MouseEvent e) {
+                if (e.isPopupTrigger()) {
+                    javax.swing.tree.TreePath ruta = arbolArchivos.getPathForLocation(e.getX(), e.getY());
+                    if (ruta != null) {
+                        arbolArchivos.setSelectionPath(ruta);
+                    }
+                    menu.show(arbolArchivos, e.getX(), e.getY());
+                }
+            }
+        });
+    }
+
     // ---------------- accion: seleccionar un archivo en el arbol ----------------
 
     private void alSeleccionarEnArbol(TreeSelectionEvent evento) {
@@ -379,16 +662,52 @@ public class VentanaPrincipal extends JFrame {
         String nombrePrograma = nombreSinExtension(archivoAbierto);
         consola.setText("Corriendo " + archivoAbierto.getFileName() + "...\n");
         ultimoCodigoCGenerado = null;
+        ultimoCodigoAsmGenerado = null;
+        ultimoCodigoC3dGenerado = null;
         ultimaTablaSimbolos = null;
+        long t0 = System.nanoTime();
         try {
             EjecutorPipeline.Resultado resultado = ejecutor.correr(editor.getText(), archivoAbierto, nombrePrograma);
             consola.setText(resultado.reporte);
             ultimoCodigoCGenerado = resultado.codigoC;
+            ultimoCodigoAsmGenerado = resultado.codigoAsm;
             ultimaTablaSimbolos = resultado.tablaSimbolos;
+            ultimoCodigoC3dGenerado = resultado.codigoC3d;
+            areaCodigoC3d.setText(resultado.codigoC3d != null ? resultado.codigoC3d : "(sin cuartetas: hay errores)");
+            areaCodigoC3d.setCaretPosition(0);
+            areaCodigoC.setText(resultado.codigoC != null ? resultado.codigoC : "(sin codigo C: hay errores)");
+            areaCodigoAsm.setText(resultado.codigoAsm != null ? resultado.codigoAsm : "(sin codigo RISC-V: hay errores)");
+            areaCodigoC.setCaretPosition(0);
+            areaCodigoAsm.setCaretPosition(0);
+            long ms = (System.nanoTime() - t0) / 1_000_000;
+            boolean ok = resultado.codigoAsm != null;
+            etiquetaResumen.setText((ok ? "✔ Compilado sin errores" : "✖ Con errores") + "  ·  " + ms + " ms");
+            etiquetaResumen.setForeground(ok ? Tema.ok : Tema.error);
         } catch (Exception ex) {
             consola.setText("Error inesperado corriendo el pipeline:\n" + ex);
         }
         consola.setCaretPosition(0);
+        pestanasInferiores.setSelectedIndex(0);
+    }
+
+    // ---------------- accion: compilar y ejecutar el RISC-V generado ----------------
+
+    /**
+     * Compila el archivo abierto y, si no hubo errores, EJECUTA el ensamblador
+     * RISC-V generado con el interprete integrado (sin herramientas externas).
+     */
+    private void ejecutarArchivoActual() {
+        correrArchivoActual();
+        if (ultimoCodigoAsmGenerado == null) {
+            return; // errores: el reporte ya los muestra
+        }
+        pestanasInferiores.setSelectedComponent(panelEjecucion);
+        if (!"pig".equals(extensionDe(archivoAbierto))) {
+            panelEjecucion.mostrarMensaje("Este archivo (." + extensionDe(archivoAbierto) + ") es solo una clase o libreria: no tiene programa principal.\n"
+                    + "Compila sin errores, pero para EJECUTAR abre un archivo .pig (con MAIOR>) que lo importe.");
+            return;
+        }
+        panelEjecucion.ejecutar(ultimoCodigoAsmGenerado);
     }
 
     // ---------------- accion: ver la tabla de simbolos ----------------
@@ -425,17 +744,21 @@ public class VentanaPrincipal extends JFrame {
     // ---------------- accion: guardar el codigo C generado ----------------
 
     private void guardarCodigoCGenerado() {
-        if (ultimoCodigoCGenerado == null) {
-            JOptionPane.showMessageDialog(this, "Todavia no hay codigo C generado (corre un programa primero, sin errores).",
+        guardarCodigoGenerado(ultimoCodigoCGenerado, ".c", "C");
+    }
+
+    private void guardarCodigoGenerado(String contenido, String extension, String etiqueta) {
+        if (contenido == null) {
+            JOptionPane.showMessageDialog(this, "Todavia no hay codigo " + etiqueta + " generado (corre un programa primero, sin errores).",
                     "Nada que guardar", JOptionPane.WARNING_MESSAGE);
             return;
         }
         JFileChooser selector = new JFileChooser();
-        selector.setDialogTitle("Guardar código C generado...");
+        selector.setDialogTitle("Guardar código " + etiqueta + " generado...");
         if (carpetaProyecto != null) {
             selector.setCurrentDirectory(carpetaProyecto.toFile());
         }
-        String nombreSugerido = (archivoAbierto != null ? nombreSinExtension(archivoAbierto) : "salida") + ".c";
+        String nombreSugerido = (archivoAbierto != null ? nombreSinExtension(archivoAbierto) : "salida") + extension;
         selector.setSelectedFile(new File(nombreSugerido));
         int resultado = selector.showSaveDialog(this);
         if (resultado != JFileChooser.APPROVE_OPTION) {
@@ -451,8 +774,8 @@ public class VentanaPrincipal extends JFrame {
             }
         }
         try {
-            Files.writeString(destino, ultimoCodigoCGenerado, StandardCharsets.UTF_8);
-            JOptionPane.showMessageDialog(this, "Código C guardado en '" + destino + "'.",
+            Files.writeString(destino, contenido, StandardCharsets.UTF_8);
+            JOptionPane.showMessageDialog(this, "Código " + etiqueta + " guardado en '" + destino + "'.",
                     "Guardado", JOptionPane.INFORMATION_MESSAGE);
         } catch (IOException ex) {
             JOptionPane.showMessageDialog(this, "No se pudo guardar '" + destino + "':\n" + ex.getMessage(),
